@@ -178,9 +178,10 @@ nullability, modifying foreign keys -- sqlift uses SQLite's recommended
 6. Rename the new table
 7. Recreate indexes
 8. Recreate triggers
-9. Run foreign key check
-10. Release the savepoint
-11. Re-enable foreign keys
+9. Recreate views referencing the table
+10. Run foreign key check
+11. Release the savepoint
+12. Re-enable foreign keys
 
 Data in columns that exist in both the old and new schemas is preserved.
 Columns that only exist in the old schema are dropped. New columns get their
