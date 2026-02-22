@@ -291,6 +291,78 @@ struct ApplyOptions {
 
 ---
 
+## JSON serialization
+
+### `to_string(OpType)`
+
+```cpp
+std::string to_string(OpType type);
+```
+
+Convert an `OpType` value to its string representation. The string matches the
+enumerator name in PascalCase (e.g. `OpType::CreateTable` -> `"CreateTable"`).
+
+**Throws:** `JsonError` if the value is not a recognized `OpType`.
+
+---
+
+### `op_type_from_string`
+
+```cpp
+OpType op_type_from_string(const std::string& s);
+```
+
+Parse a string into an `OpType`. Case-sensitive; must match an enumerator name
+exactly.
+
+**Throws:** `JsonError` if the string is not recognized.
+
+---
+
+### `to_json`
+
+```cpp
+std::string to_json(const MigrationPlan& plan);
+```
+
+Serialize a `MigrationPlan` to a JSON string. Produces a pretty-printed JSON
+object with 2-space indentation.
+
+**Returns:** a JSON string with this structure:
+
+```json
+{
+  "version": 1,
+  "operations": [
+    {
+      "type": "CreateTable",
+      "object_name": "users",
+      "description": "Create table users",
+      "sql": ["CREATE TABLE ..."],
+      "destructive": false
+    }
+  ]
+}
+```
+
+---
+
+### `from_json`
+
+```cpp
+MigrationPlan from_json(const std::string& json_str);
+```
+
+Deserialize a `MigrationPlan` from a JSON string. All fields in each operation
+are required. Unknown fields are ignored.
+
+**Throws:** `JsonError` on any parsing or validation failure (invalid JSON,
+missing fields, unknown `OpType`, unsupported version).
+
+The deserialized plan can be passed directly to `apply()`.
+
+---
+
 ## Exceptions
 
 All exceptions inherit from `sqlift::Error`, which inherits from
@@ -305,6 +377,7 @@ std::runtime_error
     sqlift::ApplyError
     sqlift::DriftError
     sqlift::DestructiveError
+    sqlift::JsonError
 ```
 
 ---

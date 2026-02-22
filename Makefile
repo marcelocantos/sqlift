@@ -2,7 +2,7 @@ MAKEFLAGS += -j$(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || ech
 
 CXX      ?= c++
 CXXFLAGS := -std=c++23 -Wall -Wextra -Wpedantic -O2
-CPPFLAGS := -I. -I$(shell brew --prefix doctest 2>/dev/null)/include
+CPPFLAGS := -I. -Ivendor/include -I$(shell brew --prefix doctest 2>/dev/null)/include
 LDLIBS   := -lsqlite3
 
 TEST_DIR  := tests

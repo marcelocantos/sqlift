@@ -52,6 +52,10 @@ class DestructiveError : public Error {
     using Error::Error;
 };
 
+class JsonError : public Error {
+    using Error::Error;
+};
+
 
 // --- sqlite_util.h ---
 
@@ -253,6 +257,7 @@ public:
 
 private:
     friend MigrationPlan diff(const Schema& current, const Schema& desired);
+    friend MigrationPlan from_json(const std::string& json_str);
     std::vector<Operation> ops_;
 };
 
@@ -271,6 +276,24 @@ struct ApplyOptions {
 
 // Apply a migration plan to a live database.
 void apply(sqlite3* db, const MigrationPlan& plan, const ApplyOptions& opts = {});
+
+
+// --- json.h ---
+
+
+
+
+// Convert an OpType to its string representation (e.g. OpType::CreateTable -> "CreateTable").
+std::string to_string(OpType type);
+
+// Parse a string into an OpType. Throws JsonError if unrecognized.
+OpType op_type_from_string(const std::string& s);
+
+// Serialize a MigrationPlan to a JSON string.
+std::string to_json(const MigrationPlan& plan);
+
+// Deserialize a MigrationPlan from a JSON string. Throws JsonError on failure.
+MigrationPlan from_json(const std::string& json_str);
 
 
 } // namespace sqlift

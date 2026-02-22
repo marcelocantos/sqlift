@@ -44,6 +44,10 @@ if (!plan.empty())
 | `extract` | `Schema extract(sqlite3* db)` | Read schema from live DB via sqlite_master + PRAGMAs. |
 | `diff` | `MigrationPlan diff(const Schema& current, const Schema& desired)` | Pure diff. Returns empty plan if identical. |
 | `apply` | `void apply(sqlite3* db, const MigrationPlan& plan, const ApplyOptions& opts = {})` | Execute plan. Throws `DestructiveError`, `DriftError`, `ApplyError`. |
+| `to_json` | `string to_json(const MigrationPlan& plan)` | Serialize plan to JSON string. |
+| `from_json` | `MigrationPlan from_json(const string& json_str)` | Deserialize plan from JSON. Throws `JsonError`. |
+| `to_string` | `string to_string(OpType type)` | OpType to PascalCase string (e.g. `"CreateTable"`). |
+| `op_type_from_string` | `OpType op_type_from_string(const string& s)` | Parse string to OpType. Throws `JsonError`. |
 
 ### Schema types
 
@@ -151,6 +155,7 @@ All inherit from `sqlift::Error` (inherits `std::runtime_error`):
 | `ApplyError` | SQL fails during `apply()` (e.g. FK violation) |
 | `DestructiveError` | Plan has destructive ops, `allow_destructive` is false |
 | `DriftError` | Schema modified outside sqlift since last `apply()` |
+| `JsonError` | Invalid JSON or missing fields in `from_json()` / `op_type_from_string()` |
 
 ## Key behaviours
 
@@ -180,4 +185,11 @@ try {
 } catch (const sqlift::DriftError& e) {
     // Schema was modified outside sqlift
 }
+
+// Serialize plan to JSON (for transmission, storage, or review)
+std::string json = sqlift::to_json(plan);
+
+// Deserialize and apply on another machine
+auto restored = sqlift::from_json(json);
+sqlift::apply(db, restored);
 ```

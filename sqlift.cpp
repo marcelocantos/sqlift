@@ -13,6 +13,8 @@
 #include <sstream>
 #include <utility>
 
+#include <nlohmann/json.hpp>
+
 namespace sqlift {
 
 // --- sqlite_util.cpp ---
@@ -917,6 +919,127 @@ void apply(sqlite3* db, const MigrationPlan& plan, const ApplyOptions& opts) {
     // Update stored hash
     Schema after = extract(db);
     store_schema_hash(db, after.hash());
+}
+
+
+
+// --- json.cpp ---
+
+
+
+
+namespace {
+
+struct OpTypeEntry {
+    OpType type;
+    const char* name;
+};
+
+constexpr OpTypeEntry op_type_names[] = {
+    {OpType::CreateTable,   "CreateTable"},
+    {OpType::DropTable,     "DropTable"},
+    {OpType::RebuildTable,  "RebuildTable"},
+    {OpType::AddColumn,     "AddColumn"},
+    {OpType::CreateIndex,   "CreateIndex"},
+    {OpType::DropIndex,     "DropIndex"},
+    {OpType::CreateView,    "CreateView"},
+    {OpType::DropView,      "DropView"},
+    {OpType::CreateTrigger, "CreateTrigger"},
+    {OpType::DropTrigger,   "DropTrigger"},
+};
+
+} // namespace
+
+std::string to_string(OpType type) {
+    for (const auto& entry : op_type_names) {
+        if (entry.type == type) return entry.name;
+    }
+    throw JsonError("Unknown OpType value: " +
+                    std::to_string(static_cast<int>(type)));
+}
+
+OpType op_type_from_string(const std::string& s) {
+    for (const auto& entry : op_type_names) {
+        if (s == entry.name) return entry.type;
+    }
+    throw JsonError("Unknown OpType string: " + s);
+}
+
+std::string to_json(const MigrationPlan& plan) {
+    nlohmann::json j;
+    j["version"] = 1;
+
+    auto& ops = j["operations"];
+    ops = nlohmann::json::array();
+
+    for (const auto& op : plan.operations()) {
+        nlohmann::json jop;
+        jop["type"] = to_string(op.type);
+        jop["object_name"] = op.object_name;
+        jop["description"] = op.description;
+        jop["sql"] = op.sql;
+        jop["destructive"] = op.destructive;
+        ops.push_back(std::move(jop));
+    }
+
+    return j.dump(2);
+}
+
+MigrationPlan from_json(const std::string& json_str) {
+    nlohmann::json j;
+    try {
+        j = nlohmann::json::parse(json_str);
+    } catch (const nlohmann::json::parse_error& e) {
+        throw JsonError(std::string("Invalid JSON: ") + e.what());
+    }
+
+    if (!j.is_object())
+        throw JsonError("Expected top-level JSON object");
+
+    if (!j.contains("version") || !j["version"].is_number_integer())
+        throw JsonError("Missing or invalid 'version' field");
+    int version = j["version"].get<int>();
+    if (version != 1)
+        throw JsonError("Unsupported version: " + std::to_string(version));
+
+    if (!j.contains("operations") || !j["operations"].is_array())
+        throw JsonError("Missing or invalid 'operations' array");
+
+    MigrationPlan plan;
+    for (const auto& jop : j["operations"]) {
+        if (!jop.is_object())
+            throw JsonError("Each operation must be a JSON object");
+
+        Operation op;
+
+        if (!jop.contains("type") || !jop["type"].is_string())
+            throw JsonError("Operation missing 'type' string field");
+        op.type = op_type_from_string(jop["type"].get<std::string>());
+
+        if (!jop.contains("object_name") || !jop["object_name"].is_string())
+            throw JsonError("Operation missing 'object_name' string field");
+        op.object_name = jop["object_name"].get<std::string>();
+
+        if (!jop.contains("description") || !jop["description"].is_string())
+            throw JsonError("Operation missing 'description' string field");
+        op.description = jop["description"].get<std::string>();
+
+        if (!jop.contains("sql") || !jop["sql"].is_array())
+            throw JsonError("Operation missing 'sql' array field");
+        for (const auto& s : jop["sql"]) {
+            if (!s.is_string())
+                throw JsonError("'sql' array must contain only strings");
+            op.sql.push_back(s.get<std::string>());
+        }
+
+        if (!jop.contains("destructive") || !jop["destructive"].is_boolean())
+            throw JsonError("Operation missing 'destructive' boolean field");
+        op.destructive = jop["destructive"].get<bool>();
+
+        plan.ops_.push_back(std::move(op));
+    }
+
+    return plan;
 }
 
 
