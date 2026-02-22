@@ -5,13 +5,13 @@ Declarative SQLite schema migration library. Two canonical source files: `sqlift
 ## Build
 
 ```sh
-make          # build library + run tests
-make lib      # build static library only
-make test     # build and run tests
-make clean    # remove build artifacts
+mk            # build library
+mk test       # build and run tests
+mk lib        # build static library only
+mk clean      # remove build artifacts
 ```
 
-Requires C++23, system SQLite3, and [doctest](https://github.com/doctest/doctest) (for tests only).
+Uses [mk](https://github.com/marcelocantos/mk) as the build tool (`mkfile`). Requires C++23 and system SQLite3. doctest is vendored in `vendor/include/`.
 
 ## Architecture
 
@@ -43,9 +43,9 @@ Plus one action:
 
 ```
 sqlift.h          # All declarations
-sqlift.cpp        # All implementations (~920 lines)
-Makefile
-tests/            # doctest suites (6 files, 41 tests)
+sqlift.cpp        # All implementations (~1040 lines)
+mkfile            # mk build file
+tests/            # doctest suites (7 files, 56 tests)
 docs/guide.md     # Concepts and workflows
 docs/reference.md # Complete API reference
 ```
@@ -58,4 +58,5 @@ All tests run in-memory (`:memory:` databases), no filesystem artifacts. Test fi
 - `test_extract.cpp` -- extracting schema from live DB
 - `test_diff.cpp` -- diffing two schemas
 - `test_apply.cpp` -- applying plans, destructive guard, drift detection
+- `test_json.cpp` -- JSON serialization round-trips and error cases
 - `test_roundtrip.cpp` -- end-to-end parse/diff/apply/extract cycles

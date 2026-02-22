@@ -59,7 +59,8 @@ reference.
 
 - C++23 compiler
 - SQLite3 (headers and library)
-- [doctest](https://github.com/doctest/doctest) (for running tests only)
+- [doctest](https://github.com/doctest/doctest) (for running tests only; vendored)
+- [mk](https://github.com/marcelocantos/mk) build tool (for building from source)
 
 ## Documentation
 
@@ -69,10 +70,10 @@ reference.
 ## Building and testing
 
 ```sh
-make          # build library and run tests
-make lib      # build static library only
-make test     # build and run tests
-make clean    # remove build artifacts
+mk            # build library
+mk test       # build and run tests
+mk lib        # build static library only
+mk clean      # remove build artifacts
 ```
 
 ## License
