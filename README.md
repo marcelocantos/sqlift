@@ -51,6 +51,10 @@ sqlift::apply(db, plan);
 Copy `sqlift.h` and `sqlift.cpp` into your project. Compile `sqlift.cpp`
 alongside your other sources and link against SQLite3. That's it.
 
+If you use an agentic coding tool (Claude Code, Cursor, Copilot, etc.), include
+[`agents-guide.md`](agents-guide.md) in your project context for a condensed API
+reference.
+
 ### Requirements
 
 - C++23 compiler
