@@ -29,6 +29,7 @@ Plus one action:
 
 ## Key design decisions
 
+- **Breaking change detection.** `diff()` throws `BreakingChangeError` for schema changes whose success depends on existing data: nullable→NOT NULL, adding FK constraints, new NOT NULL column without DEFAULT. These are rejected because they may succeed on one database instance but fail on another.
 - **No rename detection.** A disappearing column + appearing column = drop + add. Always.
 - **`raw_sql` excluded from equality.** SQLite doesn't update `sqlite_master.sql` after `ALTER TABLE ADD COLUMN`, so `Table`/`Index` equality is structural only.
 - **AddColumn fast path.** If the only change is appending nullable (or NOT NULL + DEFAULT) columns, use `ALTER TABLE ADD COLUMN` instead of a full rebuild.

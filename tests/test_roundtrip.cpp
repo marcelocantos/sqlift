@@ -86,7 +86,7 @@ TEST_CASE("roundtrip: v1 to v2 migration") {
     CHECK(plan2.empty());
 }
 
-TEST_CASE("roundtrip: v1 to v2 to v3") {
+TEST_CASE("roundtrip: v1 to v2 to v3 breaking change rejected") {
     auto v1 = "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);";
     auto v2 = "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT);";
     auto v3 = "CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT NOT NULL);";
@@ -100,16 +100,6 @@ TEST_CASE("roundtrip: v1 to v2 to v3") {
     // v2
     apply(db, diff(extract(db), parse(v2)));
 
-    // Populate email before making it NOT NULL
-    db.exec("UPDATE users SET email = 'alice@example.com' WHERE id = 1;");
-
-    // v3 (removes name, makes email NOT NULL — destructive)
-    auto plan = diff(extract(db), parse(v3));
-    CHECK(plan.has_destructive_operations());
-    apply(db, plan, {.allow_destructive = true});
-
-    Schema after = extract(db);
-    REQUIRE(after.tables.at("users").columns.size() == 2);
-    CHECK(after.tables.at("users").columns[1].name == "email");
-    CHECK(after.tables.at("users").columns[1].notnull == true);
+    // v3 makes email NOT NULL — this is a breaking change and must be rejected
+    CHECK_THROWS_AS(diff(extract(db), parse(v3)), BreakingChangeError);
 }

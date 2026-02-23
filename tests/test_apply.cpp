@@ -96,6 +96,36 @@ TEST_CASE("apply updates state hash") {
     CHECK(!stmt.column_text(0).empty());
 }
 
+TEST_CASE("apply FK violation includes parent table and rowid") {
+    Database db(":memory:");
+    db.exec("PRAGMA foreign_keys=OFF;");
+    db.exec(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);"
+        "CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER REFERENCES users(id));"
+        "INSERT INTO users VALUES (1, 'Alice');"
+        "INSERT INTO orders VALUES (1, 1);"
+        "INSERT INTO orders VALUES (2, 999);");  // orphan FK
+    db.exec("PRAGMA foreign_keys=ON;");
+
+    // Change column type on orders to trigger a rebuild — FK is unchanged so
+    // no BreakingChangeError, but the orphan data causes an FK violation.
+    Schema desired = parse(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);"
+        "CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id BIGINT REFERENCES users(id));");
+    Schema current = extract(db);
+    auto plan = diff(current, desired);
+
+    try {
+        apply(db, plan);
+        FAIL("Expected ApplyError");
+    } catch (const ApplyError& e) {
+        std::string msg = e.what();
+        CHECK(msg.find("orders") != std::string::npos);
+        CHECK(msg.find("users") != std::string::npos);
+        CHECK(msg.find("rowid") != std::string::npos);
+    }
+}
+
 TEST_CASE("apply detects drift") {
     Database db(":memory:");
 

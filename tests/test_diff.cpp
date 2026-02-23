@@ -56,15 +56,13 @@ TEST_CASE("diff add NOT NULL column with default - simple append") {
     CHECK(plan.operations()[0].type == OpType::AddColumn);
 }
 
-TEST_CASE("diff add NOT NULL column without default - requires rebuild") {
+TEST_CASE("diff add NOT NULL column without default - breaking change") {
     Schema current = parse(
         "CREATE TABLE users (id INTEGER PRIMARY KEY);");
     Schema desired = parse(
         "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL);");
 
-    auto plan = diff(current, desired);
-    REQUIRE(plan.operations().size() == 1);
-    CHECK(plan.operations()[0].type == OpType::RebuildTable);
+    CHECK_THROWS_AS(diff(current, desired), BreakingChangeError);
 }
 
 TEST_CASE("diff remove column") {
@@ -90,15 +88,13 @@ TEST_CASE("diff change column type") {
     CHECK(plan.operations()[0].type == OpType::RebuildTable);
 }
 
-TEST_CASE("diff change column nullability") {
+TEST_CASE("diff change column nullability - breaking change") {
     Schema current = parse(
         "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);");
     Schema desired = parse(
         "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL);");
 
-    auto plan = diff(current, desired);
-    REQUIRE(plan.operations().size() == 1);
-    CHECK(plan.operations()[0].type == OpType::RebuildTable);
+    CHECK_THROWS_AS(diff(current, desired), BreakingChangeError);
 }
 
 TEST_CASE("diff add index") {
@@ -170,6 +166,71 @@ TEST_CASE("diff add trigger") {
     auto plan = diff(current, desired);
     REQUIRE(plan.operations().size() == 1);
     CHECK(plan.operations()[0].type == OpType::CreateTrigger);
+}
+
+TEST_CASE("diff rejects nullable to NOT NULL on existing column") {
+    Schema current = parse(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);");
+    Schema desired = parse(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL);");
+
+    CHECK_THROWS_AS(diff(current, desired), BreakingChangeError);
+}
+
+TEST_CASE("diff rejects nullable to NOT NULL even with DEFAULT") {
+    Schema current = parse(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);");
+    Schema desired = parse(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL DEFAULT 'unknown');");
+
+    CHECK_THROWS_AS(diff(current, desired), BreakingChangeError);
+}
+
+TEST_CASE("diff rejects adding FK to existing table") {
+    Schema current = parse(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY);"
+        "CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER);");
+    Schema desired = parse(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY);"
+        "CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER REFERENCES users(id));");
+
+    CHECK_THROWS_AS(diff(current, desired), BreakingChangeError);
+}
+
+TEST_CASE("diff rejects new NOT NULL column without DEFAULT") {
+    Schema current = parse(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY);");
+    Schema desired = parse(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL);");
+
+    CHECK_THROWS_AS(diff(current, desired), BreakingChangeError);
+}
+
+TEST_CASE("diff allows new NOT NULL column with DEFAULT via AddColumn") {
+    Schema current = parse(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY);");
+    Schema desired = parse(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, active INTEGER NOT NULL DEFAULT 1);");
+
+    auto plan = diff(current, desired);
+    REQUIRE(plan.operations().size() == 1);
+    CHECK(plan.operations()[0].type == OpType::AddColumn);
+}
+
+TEST_CASE("diff allows new table with NOT NULL columns and FKs") {
+    Schema current = parse(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY);");
+    Schema desired = parse(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY);"
+        "CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id));");
+
+    auto plan = diff(current, desired);
+    bool has_create = false;
+    for (const auto& op : plan.operations()) {
+        if (op.type == OpType::CreateTable && op.object_name == "orders")
+            has_create = true;
+    }
+    CHECK(has_create);
 }
 
 TEST_CASE("diff destructive guard") {

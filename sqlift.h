@@ -52,6 +52,10 @@ class DestructiveError : public Error {
     using Error::Error;
 };
 
+class BreakingChangeError : public Error {
+    using Error::Error;
+};
+
 class JsonError : public Error {
     using Error::Error;
 };
@@ -98,11 +102,11 @@ public:
     // Step. Returns true if SQLITE_ROW, false if SQLITE_DONE. Throws on error.
     bool step();
 
-    int column_int(int col) const;
+    int64_t column_int(int col) const;
     std::string column_text(int col) const;
 
     void bind_text(int param, const std::string& value);
-    void bind_int(int param, int value);
+    void bind_int(int param, int64_t value);
 
     sqlite3_stmt* get() const { return stmt_; }
 

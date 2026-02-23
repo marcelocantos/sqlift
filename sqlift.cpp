@@ -95,8 +95,8 @@ bool Statement::step() {
                 sqlite3_errmsg(sqlite3_db_handle(stmt_)));
 }
 
-int Statement::column_int(int col) const {
-    return sqlite3_column_int(stmt_, col);
+int64_t Statement::column_int(int col) const {
+    return sqlite3_column_int64(stmt_, col);
 }
 
 std::string Statement::column_text(int col) const {
@@ -113,8 +113,8 @@ void Statement::bind_text(int param, const std::string& value) {
     }
 }
 
-void Statement::bind_int(int param, int value) {
-    int rc = sqlite3_bind_int(stmt_, param, value);
+void Statement::bind_int(int param, int64_t value) {
+    int rc = sqlite3_bind_int64(stmt_, param, value);
     if (rc != SQLITE_OK) {
         throw Error(std::string("sqlite3_bind_int: ") +
                     sqlite3_errmsg(sqlite3_db_handle(stmt_)));
@@ -330,7 +330,7 @@ Schema extract(sqlite3* db) {
                 col.type = to_upper(col_stmt.column_text(2));
                 col.notnull = col_stmt.column_int(3) != 0;
                 col.default_value = col_stmt.column_text(4);
-                col.pk = col_stmt.column_int(5);
+                col.pk = static_cast<int>(col_stmt.column_int(5));
                 table.columns.push_back(std::move(col));
             }
 
@@ -340,8 +340,8 @@ Schema extract(sqlite3* db) {
             // FK rows are grouped by id (seq=0 starts a new FK).
             std::map<int, ForeignKey> fk_map;
             while (fk_stmt.step()) {
-                int id = fk_stmt.column_int(0);
-                int seq = fk_stmt.column_int(1);
+                int id = static_cast<int>(fk_stmt.column_int(0));
+                int seq = static_cast<int>(fk_stmt.column_int(1));
                 if (seq == 0) {
                     ForeignKey fk;
                     fk.to_table = fk_stmt.column_text(2);
@@ -732,6 +732,72 @@ MigrationPlan diff(const Schema& current, const Schema& desired) {
         }
     }
 
+    // Check for breaking changes across all modified tables before building the plan.
+    {
+        std::vector<std::string> violations;
+        for (const auto& [name, desired_table] : desired.tables) {
+            auto it = current.tables.find(name);
+            if (it == current.tables.end()) continue;
+            const auto& current_table = it->second;
+            if (current_table == desired_table) continue;
+
+            // Build column lookup for the current table.
+            std::map<std::string, const Column*> cur_col_map;
+            for (const auto& col : current_table.columns)
+                cur_col_map[col.name] = &col;
+
+            // (a) Existing nullable column becomes NOT NULL.
+            for (const auto& col : desired_table.columns) {
+                auto cit = cur_col_map.find(col.name);
+                if (cit != cur_col_map.end() && !cit->second->notnull && col.notnull) {
+                    violations.push_back(
+                        "Table '" + name + "': column '" + col.name +
+                        "' changes from nullable to NOT NULL");
+                }
+            }
+
+            // (b) New FK constraint on existing table.
+            for (const auto& fk : desired_table.foreign_keys) {
+                bool found = false;
+                for (const auto& cur_fk : current_table.foreign_keys) {
+                    if (cur_fk == fk) { found = true; break; }
+                }
+                if (!found) {
+                    std::ostringstream oss;
+                    oss << "Table '" << name << "': adds foreign key (";
+                    for (size_t i = 0; i < fk.from_columns.size(); ++i) {
+                        if (i > 0) oss << ", ";
+                        oss << fk.from_columns[i];
+                    }
+                    oss << ") references " << fk.to_table << "(";
+                    for (size_t i = 0; i < fk.to_columns.size(); ++i) {
+                        if (i > 0) oss << ", ";
+                        oss << fk.to_columns[i];
+                    }
+                    oss << ")";
+                    violations.push_back(oss.str());
+                }
+            }
+
+            // (c) New NOT NULL column without DEFAULT (guaranteed failure on non-empty table).
+            for (const auto& col : desired_table.columns) {
+                if (cur_col_map.find(col.name) == cur_col_map.end() &&
+                    col.notnull && col.default_value.empty() && col.pk == 0) {
+                    violations.push_back(
+                        "Table '" + name + "': new column '" + col.name +
+                        "' is NOT NULL without DEFAULT");
+                }
+            }
+        }
+        if (!violations.empty()) {
+            std::ostringstream oss;
+            oss << "Breaking schema changes detected:";
+            for (const auto& v : violations)
+                oss << "\n- " << v;
+            throw BreakingChangeError(oss.str());
+        }
+    }
+
     // Modify existing tables
     for (const auto& [name, desired_table] : desired.tables) {
         auto it = current.tables.find(name);
@@ -903,10 +969,14 @@ void apply(sqlite3* db, const MigrationPlan& plan, const ApplyOptions& opts) {
             if (sql.find("PRAGMA foreign_key_check") == 0) {
                 Statement stmt(db, sql);
                 if (stmt.step()) {
-                    // There are FK violations
                     std::string table = stmt.column_text(0);
+                    int64_t rowid = stmt.column_int(1);
+                    std::string parent = stmt.column_text(2);
                     throw ApplyError(
-                        "Foreign key check failed for table: " + table);
+                        "Foreign key violation in table '" + table +
+                        "' (rowid " + std::to_string(rowid) +
+                        "): references missing row in parent table '" +
+                        parent + "'");
                 }
                 continue;
             }

@@ -152,6 +152,7 @@ All inherit from `sqlift::Error` (inherits `std::runtime_error`):
 | `ParseError` | Invalid SQL in `parse()` |
 | `ExtractError` | Schema extraction fails |
 | `DiffError` | Internal diff error |
+| `BreakingChangeError` | Schema change is backwards-incompatible (see below) |
 | `ApplyError` | SQL fails during `apply()` (e.g. FK violation) |
 | `DestructiveError` | Plan has destructive ops, `allow_destructive` is false |
 | `DriftError` | Schema modified outside sqlift since last `apply()` |
@@ -163,6 +164,7 @@ All inherit from `sqlift::Error` (inherits `std::runtime_error`):
 - **12-step table rebuild**: Any other table change uses SQLite's recommended rebuild (disable FKs, savepoint, create new, copy data, drop old, rename, recreate indexes/triggers/views, FK check, release, re-enable FKs).
 - **Destructive guard**: `apply()` throws `DestructiveError` unless `{.allow_destructive = true}`.
 - **Drift detection**: Stores SHA-256 hash in `_sqlift_state` table after each apply. Throws `DriftError` if schema changed outside sqlift.
+- **Breaking change detection**: `diff()` throws `BreakingChangeError` for schema changes whose success depends on existing data — i.e., changes that might work on one database but fail on another. Detected cases: (1) existing nullable column becomes NOT NULL, (2) new FK constraint added to existing table, (3) new NOT NULL column without DEFAULT. The engineer must find a safe alternative (e.g., create a new table and migrate data at the application level).
 - **No rename detection**: A removed + added column is always a drop + add.
 - **Operation order**: Drop triggers/views/indexes, then table ops, then create indexes/views/triggers.
 - **`raw_sql` excluded from equality**: SQLite doesn't update `sqlite_master.sql` after `ALTER TABLE ADD COLUMN`, so Table/Index equality is structural only.
@@ -193,3 +195,11 @@ std::string json = sqlift::to_json(plan);
 auto restored = sqlift::from_json(json);
 sqlift::apply(db, restored);
 ```
+
+## Agentic migration guidance
+
+When `diff()` throws `BreakingChangeError`, agentic coding tools can suggest safe alternatives. Common patterns:
+
+- **Nullable → NOT NULL**: Create a new table with the desired schema, write application code to copy data (coalescing NULLs), then drop the old table in a later release.
+- **Adding FK constraints**: Create a new table with the FK, migrate data at the application level (filtering orphans), retire the old table.
+- **New NOT NULL column without DEFAULT**: Add the column as nullable first, populate it via application code, then create a new table with the NOT NULL constraint in a later release.
