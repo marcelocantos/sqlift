@@ -161,3 +161,37 @@ TEST_CASE("from_json rejects unknown OpType string") {
         {"type":"Bogus","object_name":"t","description":"d","sql":[],"destructive":false}
     ]})"), JsonError);
 }
+
+TEST_CASE("from_json rejects tampered plan with mismatched type and sql") {
+    // A CreateTable operation should start with "CREATE TABLE", not "DROP TABLE"
+    auto tampered_create =
+        "{\"version\":1,\"operations\":["
+        "{\"type\":\"CreateTable\",\"object_name\":\"t\",\"description\":\"d\","
+        "\"sql\":[\"DROP TABLE t\"],\"destructive\":false}"
+        "]}";
+    CHECK_THROWS_AS(from_json(tampered_create), JsonError);
+
+    // A DropTable operation should start with "DROP TABLE", not "CREATE TABLE"
+    auto tampered_drop =
+        "{\"version\":1,\"operations\":["
+        "{\"type\":\"DropTable\",\"object_name\":\"t\",\"description\":\"d\","
+        "\"sql\":[\"CREATE TABLE t (id INTEGER)\"],\"destructive\":true}"
+        "]}";
+    CHECK_THROWS_AS(from_json(tampered_drop), JsonError);
+
+    // A RebuildTable operation should start with "PRAGMA foreign_keys"
+    auto tampered_rebuild =
+        "{\"version\":1,\"operations\":["
+        "{\"type\":\"RebuildTable\",\"object_name\":\"t\",\"description\":\"d\","
+        "\"sql\":[\"DROP TABLE t\"],\"destructive\":false}"
+        "]}";
+    CHECK_THROWS_AS(from_json(tampered_rebuild), JsonError);
+
+    // An AddColumn operation should start with "ALTER TABLE"
+    auto tampered_add =
+        "{\"version\":1,\"operations\":["
+        "{\"type\":\"AddColumn\",\"object_name\":\"t\",\"description\":\"d\","
+        "\"sql\":[\"DROP TABLE t\"],\"destructive\":false}"
+        "]}";
+    CHECK_THROWS_AS(from_json(tampered_add), JsonError);
+}

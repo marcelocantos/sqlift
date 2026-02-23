@@ -135,8 +135,17 @@ struct Column {
     bool notnull = false;
     std::string default_value;   // Raw SQL expression; empty if no default.
     int pk = 0;                  // 0 = not PK, 1+ = position in composite PK.
+    std::string collation;       // e.g. "NOCASE"; empty = default (BINARY).
+    int generated = 0;           // 0=normal, 2=virtual, 3=stored (matches table_xinfo hidden field).
+    std::string generated_expr;  // e.g. "first_name || ' ' || last_name"; empty if not generated.
 
     bool operator==(const Column&) const = default;
+};
+
+struct CheckConstraint {
+    std::string name;         // empty if unnamed
+    std::string expression;   // e.g. "age > 0"
+    bool operator==(const CheckConstraint&) const = default;
 };
 
 struct ForeignKey {
@@ -153,14 +162,19 @@ struct Table {
     std::string name;
     std::vector<Column> columns;           // Ordered by cid.
     std::vector<ForeignKey> foreign_keys;
+    std::vector<CheckConstraint> check_constraints;
     bool without_rowid = false;
+    bool strict = false;
     std::string raw_sql;                   // Original CREATE TABLE from sqlite_master.
 
     // Structural equality — excludes raw_sql (which SQLite doesn't update after
     // ALTER TABLE ADD COLUMN, so it can't be relied on for comparison).
     bool operator==(const Table& o) const {
         return name == o.name && columns == o.columns &&
-               foreign_keys == o.foreign_keys && without_rowid == o.without_rowid;
+               foreign_keys == o.foreign_keys &&
+               check_constraints == o.check_constraints &&
+               without_rowid == o.without_rowid &&
+               strict == o.strict;
     }
 };
 

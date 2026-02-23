@@ -221,7 +221,14 @@ std::string Schema::hash() const {
                 << ' ' << col.type
                 << (col.notnull ? " NOTNULL" : "")
                 << " DEFAULT=" << col.default_value
-                << " PK=" << col.pk << '\n';
+                << " PK=" << col.pk;
+            if (!col.collation.empty())
+                oss << " COLLATE=" << col.collation;
+            if (col.generated != 0)
+                oss << " GENERATED=" << col.generated;
+            if (!col.generated_expr.empty())
+                oss << " EXPR=" << col.generated_expr;
+            oss << '\n';
         }
         for (const auto& fk : table.foreign_keys) {
             oss << "  FK";
@@ -234,7 +241,14 @@ std::string Schema::hash() const {
             oss << ") UPDATE=" << fk.on_update
                 << " DELETE=" << fk.on_delete << '\n';
         }
+        for (const auto& chk : table.check_constraints) {
+            oss << "  CHECK";
+            if (!chk.name.empty()) oss << " NAME=" << chk.name;
+            oss << " EXPR=" << chk.expression << '\n';
+        }
         oss << "  ROWID=" << (table.without_rowid ? "no" : "yes") << '\n';
+        if (table.strict)
+            oss << "  STRICT=yes\n";
     }
 
     for (const auto& [name, idx] : indexes) {
@@ -266,22 +280,210 @@ bool starts_with(const std::string& s, const std::string& prefix) {
     return s.size() >= prefix.size() && s.compare(0, prefix.size(), prefix) == 0;
 }
 
-bool ends_with_ci(const std::string& s, const std::string& suffix) {
-    if (s.size() < suffix.size()) return false;
-    auto start = s.size() - suffix.size();
-    for (size_t i = 0; i < suffix.size(); ++i) {
-        if (std::tolower(static_cast<unsigned char>(s[start + i])) !=
-            std::tolower(static_cast<unsigned char>(suffix[i])))
-            return false;
-    }
-    return true;
-}
-
 std::string to_upper(const std::string& s) {
     std::string result = s;
     std::transform(result.begin(), result.end(), result.begin(),
                    [](unsigned char c) { return std::toupper(c); });
     return result;
+}
+
+// Quote an identifier for use in SQL.
+std::string quote_id(const std::string& name) {
+    // Use double quotes, escaping embedded double quotes.
+    std::string result = "\"";
+    for (char c : name) {
+        if (c == '"') result += "\"\"";
+        else result += c;
+    }
+    result += '"';
+    return result;
+}
+
+std::string trim(const std::string& s) {
+    auto start = s.find_first_not_of(" \t\n\r");
+    if (start == std::string::npos) return {};
+    auto end = s.find_last_not_of(" \t\n\r");
+    return s.substr(start, end - start + 1);
+}
+
+// Parse the body of a CREATE TABLE statement to extract CHECK constraints
+// and GENERATED ALWAYS AS expressions.
+// Returns a pair: (check_constraints, column_name -> generated_expr map).
+struct ParsedTableBody {
+    std::vector<CheckConstraint> checks;
+    std::map<std::string, std::string> generated_exprs;
+};
+
+ParsedTableBody parse_create_table_body(const std::string& raw_sql) {
+    ParsedTableBody result;
+
+    // Find the outer '(' of CREATE TABLE ... (...)
+    int depth = 0;
+    size_t body_start = std::string::npos;
+    size_t body_end = std::string::npos;
+    for (size_t i = 0; i < raw_sql.size(); ++i) {
+        if (raw_sql[i] == '(') {
+            if (depth == 0) body_start = i + 1;
+            ++depth;
+        } else if (raw_sql[i] == ')') {
+            --depth;
+            if (depth == 0) {
+                body_end = i;
+                break;
+            }
+        }
+    }
+    if (body_start == std::string::npos || body_end == std::string::npos)
+        return result;
+
+    // Split inner content by ',' at depth 0
+    std::vector<std::string> defs;
+    depth = 0;
+    size_t seg_start = body_start;
+    for (size_t i = body_start; i < body_end; ++i) {
+        if (raw_sql[i] == '(') ++depth;
+        else if (raw_sql[i] == ')') --depth;
+        else if (raw_sql[i] == ',' && depth == 0) {
+            defs.push_back(trim(raw_sql.substr(seg_start, i - seg_start)));
+            seg_start = i + 1;
+        }
+    }
+    defs.push_back(trim(raw_sql.substr(seg_start, body_end - seg_start)));
+
+    for (const auto& def : defs) {
+        std::string upper_def = to_upper(def);
+
+        // Check for table-level CHECK constraint
+        // Could be: CHECK(...) or CONSTRAINT name CHECK(...)
+        bool is_check = false;
+        CheckConstraint chk;
+
+        if (starts_with(upper_def, "CHECK")) {
+            is_check = true;
+            // Extract expression from CHECK(...)
+            auto paren = def.find('(');
+            if (paren != std::string::npos) {
+                // Find matching close paren
+                int d = 0;
+                size_t expr_end = std::string::npos;
+                for (size_t i = paren; i < def.size(); ++i) {
+                    if (def[i] == '(') ++d;
+                    else if (def[i] == ')') {
+                        --d;
+                        if (d == 0) { expr_end = i; break; }
+                    }
+                }
+                if (expr_end != std::string::npos)
+                    chk.expression = trim(def.substr(paren + 1, expr_end - paren - 1));
+            }
+        } else if (starts_with(upper_def, "CONSTRAINT")) {
+            // CONSTRAINT name CHECK(...)
+            auto check_pos = upper_def.find("CHECK");
+            if (check_pos != std::string::npos) {
+                is_check = true;
+                // Extract constraint name: between CONSTRAINT and CHECK
+                std::string name_part = trim(def.substr(10, check_pos - 10));
+                // Strip quotes if present
+                if (name_part.size() >= 2 &&
+                    ((name_part.front() == '"' && name_part.back() == '"') ||
+                     (name_part.front() == '[' && name_part.back() == ']') ||
+                     (name_part.front() == '`' && name_part.back() == '`'))) {
+                    name_part = name_part.substr(1, name_part.size() - 2);
+                }
+                chk.name = name_part;
+                // Extract expression
+                auto paren = def.find('(', check_pos);
+                if (paren != std::string::npos) {
+                    int d = 0;
+                    size_t expr_end = std::string::npos;
+                    for (size_t i = paren; i < def.size(); ++i) {
+                        if (def[i] == '(') ++d;
+                        else if (def[i] == ')') {
+                            --d;
+                            if (d == 0) { expr_end = i; break; }
+                        }
+                    }
+                    if (expr_end != std::string::npos)
+                        chk.expression = trim(def.substr(paren + 1, expr_end - paren - 1));
+                }
+            }
+        }
+
+        if (is_check) {
+            result.checks.push_back(std::move(chk));
+            continue;
+        }
+
+        // Check for column-level GENERATED ALWAYS AS (expr)
+        auto gen_pos = upper_def.find("GENERATED ALWAYS AS");
+        if (gen_pos != std::string::npos) {
+            // Extract column name (first token of the definition)
+            auto first_space = def.find_first_of(" \t");
+            std::string col_name;
+            if (first_space != std::string::npos)
+                col_name = def.substr(0, first_space);
+            else
+                col_name = def;
+            // Strip quotes from column name
+            if (col_name.size() >= 2 &&
+                ((col_name.front() == '"' && col_name.back() == '"') ||
+                 (col_name.front() == '[' && col_name.back() == ']') ||
+                 (col_name.front() == '`' && col_name.back() == '`'))) {
+                col_name = col_name.substr(1, col_name.size() - 2);
+            }
+
+            // Find the expression in parens after GENERATED ALWAYS AS
+            auto paren = def.find('(', gen_pos);
+            if (paren != std::string::npos) {
+                int d = 0;
+                size_t expr_end = std::string::npos;
+                for (size_t i = paren; i < def.size(); ++i) {
+                    if (def[i] == '(') ++d;
+                    else if (def[i] == ')') {
+                        --d;
+                        if (d == 0) { expr_end = i; break; }
+                    }
+                }
+                if (expr_end != std::string::npos)
+                    result.generated_exprs[col_name] =
+                        trim(def.substr(paren + 1, expr_end - paren - 1));
+            }
+        }
+    }
+
+    return result;
+}
+
+// Parse table options after the closing ')' of CREATE TABLE.
+// Returns (without_rowid, strict).
+std::pair<bool, bool> parse_table_options(const std::string& raw_sql) {
+    bool without_rowid = false;
+    bool strict = false;
+
+    // Find the last ')' at depth 0
+    int depth = 0;
+    size_t close_paren = std::string::npos;
+    for (size_t i = 0; i < raw_sql.size(); ++i) {
+        if (raw_sql[i] == '(') ++depth;
+        else if (raw_sql[i] == ')') {
+            --depth;
+            if (depth == 0) { close_paren = i; break; }
+        }
+    }
+    if (close_paren == std::string::npos || close_paren + 1 >= raw_sql.size())
+        return {without_rowid, strict};
+
+    std::string tail = raw_sql.substr(close_paren + 1);
+    // Split by comma
+    std::istringstream iss(tail);
+    std::string token;
+    while (std::getline(iss, token, ',')) {
+        std::string t = to_upper(trim(token));
+        if (t == "WITHOUT ROWID") without_rowid = true;
+        else if (t == "STRICT") strict = true;
+    }
+
+    return {without_rowid, strict};
 }
 
 } // namespace
@@ -316,14 +518,14 @@ Schema extract(sqlite3* db) {
             table.name = row.name;
             table.raw_sql = row.sql;
 
-            // Detect WITHOUT ROWID
-            if (ends_with_ci(row.sql, "without rowid")) {
-                table.without_rowid = true;
-            }
+            // Detect WITHOUT ROWID and STRICT from table options
+            auto [wor, strict_flag] = parse_table_options(row.sql);
+            table.without_rowid = wor;
+            table.strict = strict_flag;
 
-            // Columns via PRAGMA table_info
+            // Columns via PRAGMA table_xinfo (includes generated column info)
             Statement col_stmt(db,
-                "PRAGMA table_info('" + row.name + "')");
+                "PRAGMA table_xinfo(" + quote_id(row.name) + ")");
             while (col_stmt.step()) {
                 Column col;
                 col.name = col_stmt.column_text(1);
@@ -331,12 +533,35 @@ Schema extract(sqlite3* db) {
                 col.notnull = col_stmt.column_int(3) != 0;
                 col.default_value = col_stmt.column_text(4);
                 col.pk = static_cast<int>(col_stmt.column_int(5));
+                col.generated = static_cast<int>(col_stmt.column_int(6));
                 table.columns.push_back(std::move(col));
+            }
+
+            // Collation via sqlite3_table_column_metadata
+            for (auto& col : table.columns) {
+                const char* collation = nullptr;
+                int rc = sqlite3_table_column_metadata(
+                    db, nullptr, row.name.c_str(), col.name.c_str(),
+                    nullptr, &collation, nullptr, nullptr, nullptr);
+                if (rc == SQLITE_OK && collation) {
+                    std::string coll = collation;
+                    if (to_upper(coll) != "BINARY")
+                        col.collation = to_upper(coll);
+                }
+            }
+
+            // Parse CHECK constraints and GENERATED expressions from raw_sql
+            auto parsed = parse_create_table_body(row.sql);
+            table.check_constraints = std::move(parsed.checks);
+            for (auto& col : table.columns) {
+                auto it = parsed.generated_exprs.find(col.name);
+                if (it != parsed.generated_exprs.end())
+                    col.generated_expr = it->second;
             }
 
             // Foreign keys via PRAGMA foreign_key_list
             Statement fk_stmt(db,
-                "PRAGMA foreign_key_list('" + row.name + "')");
+                "PRAGMA foreign_key_list(" + quote_id(row.name) + ")");
             // FK rows are grouped by id (seq=0 starts a new FK).
             std::map<int, ForeignKey> fk_map;
             while (fk_stmt.step()) {
@@ -373,7 +598,7 @@ Schema extract(sqlite3* db) {
 
             // Columns via PRAGMA index_info
             Statement idx_info(db,
-                "PRAGMA index_info('" + row.name + "')");
+                "PRAGMA index_info(" + quote_id(row.name) + ")");
             while (idx_info.step()) {
                 std::string col_name = idx_info.column_text(2);
                 if (col_name.empty()) {
@@ -448,26 +673,97 @@ Schema parse(const std::string& sql) {
 
 namespace {
 
-// Quote an identifier for use in SQL.
-std::string quote_id(const std::string& name) {
-    // Use double quotes, escaping embedded double quotes.
-    std::string result = "\"";
-    for (char c : name) {
-        if (c == '"') result += "\"\"";
-        else result += c;
-    }
-    result += '"';
-    return result;
-}
-
 // Check if a column can be added via simple ALTER TABLE ADD COLUMN.
 bool can_add_column(const Column& col) {
     // SQLite restrictions on ADD COLUMN:
     // - Cannot be PRIMARY KEY
     // - Must have DEFAULT or allow NULL if NOT NULL
+    // - Cannot be a generated column
     if (col.pk != 0) return false;
     if (col.notnull && col.default_value.empty()) return false;
+    if (col.generated != 0) return false;
     return true;
+}
+
+// Extract SQL references: tokenize SQL into identifiers and check against known names.
+// Excludes the object's own name.
+std::set<std::string> extract_sql_references(
+    const std::string& sql, const std::string& own_name,
+    const std::set<std::string>& known_names)
+{
+    std::set<std::string> refs;
+    std::string word;
+    for (size_t i = 0; i <= sql.size(); ++i) {
+        char c = (i < sql.size()) ? sql[i] : '\0';
+        if (std::isalnum(static_cast<unsigned char>(c)) || c == '_') {
+            word += c;
+        } else {
+            if (!word.empty()) {
+                if (word != own_name && known_names.count(word))
+                    refs.insert(word);
+                word.clear();
+            }
+        }
+    }
+    return refs;
+}
+
+// Topological sort using Kahn's algorithm.
+// If reverse==true, returns reverse topological order (dependents first).
+std::vector<std::string> topo_sort(
+    const std::vector<std::string>& nodes,
+    const std::map<std::string, std::set<std::string>>& deps,
+    bool reverse = false)
+{
+    // Build in-degree map
+    std::map<std::string, int> in_degree;
+    std::map<std::string, std::set<std::string>> dependents;
+    for (const auto& n : nodes) in_degree[n] = 0;
+
+    for (const auto& n : nodes) {
+        auto it = deps.find(n);
+        if (it != deps.end()) {
+            for (const auto& dep : it->second) {
+                if (in_degree.count(dep)) {
+                    in_degree[n]++;
+                    dependents[dep].insert(n);
+                }
+            }
+        }
+    }
+
+    std::vector<std::string> queue;
+    for (const auto& n : nodes) {
+        if (in_degree[n] == 0)
+            queue.push_back(n);
+    }
+    // Sort queue for deterministic ordering
+    std::sort(queue.begin(), queue.end());
+
+    std::vector<std::string> result;
+    size_t front = 0;
+    while (front < queue.size()) {
+        std::string n = queue[front++];
+        result.push_back(n);
+        if (dependents.count(n)) {
+            std::vector<std::string> newly_free;
+            for (const auto& dep : dependents[n]) {
+                if (--in_degree[dep] == 0)
+                    newly_free.push_back(dep);
+            }
+            std::sort(newly_free.begin(), newly_free.end());
+            for (auto& nf : newly_free)
+                queue.push_back(std::move(nf));
+        }
+    }
+
+    if (result.size() != nodes.size())
+        throw DiffError("Circular dependency detected among views/triggers");
+
+    if (reverse)
+        std::reverse(result.begin(), result.end());
+
+    return result;
 }
 
 // Check if the only difference is columns appended at the end (AddColumn fast path).
@@ -479,8 +775,12 @@ bool is_append_only(const Table& current, const Table& desired) {
     }
     // Foreign keys must be unchanged
     if (current.foreign_keys != desired.foreign_keys) return false;
+    // CHECK constraints must be unchanged
+    if (current.check_constraints != desired.check_constraints) return false;
     // WITHOUT ROWID must be unchanged
     if (current.without_rowid != desired.without_rowid) return false;
+    // STRICT must be unchanged
+    if (current.strict != desired.strict) return false;
     // All new columns must be addable
     for (size_t i = current.columns.size(); i < desired.columns.size(); ++i) {
         if (!can_add_column(desired.columns[i])) return false;
@@ -494,6 +794,7 @@ std::string add_column_sql(const std::string& table_name, const Column& col) {
     oss << "ALTER TABLE " << quote_id(table_name)
         << " ADD COLUMN " << quote_id(col.name);
     if (!col.type.empty()) oss << ' ' << col.type;
+    if (!col.collation.empty()) oss << " COLLATE " << col.collation;
     if (col.notnull) oss << " NOT NULL";
     if (!col.default_value.empty()) oss << " DEFAULT " << col.default_value;
     return oss.str();
@@ -531,13 +832,18 @@ std::vector<std::string> rebuild_table_sql(
         }
     }
 
-    // Step 4: Copy data from old table to new (common columns only)
+    // Step 4: Copy data from old table to new (common columns only).
+    // Skip generated columns — they are computed and can't be inserted into.
     std::vector<std::string> common_cols;
     std::set<std::string> desired_col_names;
-    for (const auto& col : desired.columns)
+    std::set<std::string> generated_col_names;
+    for (const auto& col : desired.columns) {
         desired_col_names.insert(col.name);
+        if (col.generated != 0)
+            generated_col_names.insert(col.name);
+    }
     for (const auto& col : current.columns) {
-        if (desired_col_names.count(col.name))
+        if (desired_col_names.count(col.name) && !generated_col_names.count(col.name))
             common_cols.push_back(quote_id(col.name));
     }
     if (!common_cols.empty()) {
@@ -624,8 +930,12 @@ std::string describe_table_changes(const Table& current, const Table& desired) {
 
     if (current.foreign_keys != desired.foreign_keys)
         oss << " foreign keys changed;";
+    if (current.check_constraints != desired.check_constraints)
+        oss << " CHECK constraints changed;";
     if (current.without_rowid != desired.without_rowid)
         oss << " WITHOUT ROWID changed;";
+    if (current.strict != desired.strict)
+        oss << " STRICT changed;";
 
     return oss.str();
 }
@@ -651,30 +961,74 @@ bool MigrationPlan::has_destructive_operations() const {
 MigrationPlan diff(const Schema& current, const Schema& desired) {
     MigrationPlan plan;
 
+    // Build known names for dependency analysis
+    std::set<std::string> known_names;
+    for (const auto& [n, _] : current.tables) known_names.insert(n);
+    for (const auto& [n, _] : current.views) known_names.insert(n);
+    for (const auto& [n, _] : desired.tables) known_names.insert(n);
+    for (const auto& [n, _] : desired.views) known_names.insert(n);
+
     // --- Phase 1: Drop triggers that are removed or changed ---
-    for (const auto& [name, trig] : current.triggers) {
-        auto it = desired.triggers.find(name);
-        if (it == desired.triggers.end() || it->second.sql != trig.sql) {
+    // Collect triggers to drop, then sort by reverse dependency order
+    {
+        std::vector<std::string> to_drop;
+        std::map<std::string, bool> drop_destructive;
+        for (const auto& [name, trig] : current.triggers) {
+            auto it = desired.triggers.find(name);
+            if (it == desired.triggers.end() || it->second.sql != trig.sql) {
+                to_drop.push_back(name);
+                drop_destructive[name] = (it == desired.triggers.end());
+            }
+        }
+        // Build dependency graph for triggers being dropped
+        std::map<std::string, std::set<std::string>> deps;
+        for (const auto& name : to_drop) {
+            deps[name] = extract_sql_references(
+                current.triggers.at(name).sql, name, known_names);
+            // Only keep deps that are also being dropped
+            std::set<std::string> drop_set(to_drop.begin(), to_drop.end());
+            std::set<std::string> filtered;
+            for (const auto& d : deps[name])
+                if (drop_set.count(d)) filtered.insert(d);
+            deps[name] = std::move(filtered);
+        }
+        auto sorted = topo_sort(to_drop, deps, true);
+        for (const auto& name : sorted) {
             plan.ops_.push_back({
                 .type = OpType::DropTrigger,
                 .object_name = name,
                 .description = "Drop trigger " + name,
                 .sql = {"DROP TRIGGER IF EXISTS " + quote_id(name)},
-                .destructive = (it == desired.triggers.end()),
+                .destructive = drop_destructive[name],
             });
         }
     }
 
     // --- Phase 2: Drop views that are removed or changed ---
-    for (const auto& [name, view] : current.views) {
-        auto it = desired.views.find(name);
-        if (it == desired.views.end() || it->second.sql != view.sql) {
+    // Sort by reverse dependency order (dependents dropped first)
+    {
+        std::vector<std::string> to_drop;
+        std::map<std::string, bool> drop_destructive;
+        for (const auto& [name, view] : current.views) {
+            auto it = desired.views.find(name);
+            if (it == desired.views.end() || it->second.sql != view.sql) {
+                to_drop.push_back(name);
+                drop_destructive[name] = (it == desired.views.end());
+            }
+        }
+        std::map<std::string, std::set<std::string>> deps;
+        for (const auto& name : to_drop) {
+            deps[name] = extract_sql_references(
+                current.views.at(name).sql, name, known_names);
+        }
+        auto sorted = topo_sort(to_drop, deps, true);
+        for (const auto& name : sorted) {
             plan.ops_.push_back({
                 .type = OpType::DropView,
                 .object_name = name,
                 .description = "Drop view " + name,
                 .sql = {"DROP VIEW IF EXISTS " + quote_id(name)},
-                .destructive = (it == desired.views.end()),
+                .destructive = drop_destructive[name],
             });
         }
     }
@@ -779,7 +1133,21 @@ MigrationPlan diff(const Schema& current, const Schema& desired) {
                 }
             }
 
-            // (c) New NOT NULL column without DEFAULT (guaranteed failure on non-empty table).
+            // (c) New CHECK constraint on existing table (existing data may violate it).
+            for (const auto& chk : desired_table.check_constraints) {
+                bool found = false;
+                for (const auto& cur_chk : current_table.check_constraints) {
+                    if (cur_chk == chk) { found = true; break; }
+                }
+                if (!found) {
+                    violations.push_back(
+                        "Table '" + name + "': adds CHECK constraint" +
+                        (chk.name.empty() ? "" : " '" + chk.name + "'") +
+                        " (" + chk.expression + ")");
+                }
+            }
+
+            // (d) New NOT NULL column without DEFAULT (guaranteed failure on non-empty table).
             for (const auto& col : desired_table.columns) {
                 if (cur_col_map.find(col.name) == cur_col_map.end() &&
                     col.notnull && col.default_value.empty() && col.pk == 0) {
@@ -871,28 +1239,64 @@ MigrationPlan diff(const Schema& current, const Schema& desired) {
     }
 
     // --- Phase 6: Create views ---
-    for (const auto& [name, view] : desired.views) {
-        auto it = current.views.find(name);
-        if (it == current.views.end() || it->second.sql != view.sql) {
+    // Sort by topological order (dependencies created first)
+    {
+        std::vector<std::string> to_create;
+        for (const auto& [name, view] : desired.views) {
+            auto it = current.views.find(name);
+            if (it == current.views.end() || it->second.sql != view.sql) {
+                to_create.push_back(name);
+            }
+        }
+        // Build known names from desired schema for create ordering
+        std::set<std::string> desired_known;
+        for (const auto& [n, _] : desired.tables) desired_known.insert(n);
+        for (const auto& [n, _] : desired.views) desired_known.insert(n);
+
+        std::map<std::string, std::set<std::string>> deps;
+        for (const auto& name : to_create) {
+            deps[name] = extract_sql_references(
+                desired.views.at(name).sql, name, desired_known);
+        }
+        auto sorted = topo_sort(to_create, deps, false);
+        for (const auto& name : sorted) {
             plan.ops_.push_back({
                 .type = OpType::CreateView,
                 .object_name = name,
                 .description = "Create view " + name,
-                .sql = {view.sql},
+                .sql = {desired.views.at(name).sql},
                 .destructive = false,
             });
         }
     }
 
     // --- Phase 7: Create triggers ---
-    for (const auto& [name, trig] : desired.triggers) {
-        auto it = current.triggers.find(name);
-        if (it == current.triggers.end() || it->second.sql != trig.sql) {
+    // Sort by topological order (dependencies created first)
+    {
+        std::vector<std::string> to_create;
+        for (const auto& [name, trig] : desired.triggers) {
+            auto it = current.triggers.find(name);
+            if (it == current.triggers.end() || it->second.sql != trig.sql) {
+                to_create.push_back(name);
+            }
+        }
+        std::set<std::string> desired_known;
+        for (const auto& [n, _] : desired.tables) desired_known.insert(n);
+        for (const auto& [n, _] : desired.views) desired_known.insert(n);
+        for (const auto& [n, _] : desired.triggers) desired_known.insert(n);
+
+        std::map<std::string, std::set<std::string>> deps;
+        for (const auto& name : to_create) {
+            deps[name] = extract_sql_references(
+                desired.triggers.at(name).sql, name, desired_known);
+        }
+        auto sorted = topo_sort(to_create, deps, false);
+        for (const auto& name : sorted) {
             plan.ops_.push_back({
                 .type = OpType::CreateTrigger,
                 .object_name = name,
                 .description = "Create trigger " + name,
-                .sql = {trig.sql},
+                .sql = {desired.triggers.at(name).sql},
                 .destructive = false,
             });
         }
@@ -1105,6 +1509,30 @@ MigrationPlan from_json(const std::string& json_str) {
         if (!jop.contains("destructive") || !jop["destructive"].is_boolean())
             throw JsonError("Operation missing 'destructive' boolean field");
         op.destructive = jop["destructive"].get<bool>();
+
+        // Validate SQL prefix matches OpType
+        if (!op.sql.empty()) {
+            const std::string& first_sql = op.sql[0];
+            std::string expected_prefix;
+            switch (op.type) {
+                case OpType::CreateTable:   expected_prefix = "CREATE TABLE"; break;
+                case OpType::DropTable:     expected_prefix = "DROP TABLE"; break;
+                case OpType::RebuildTable:  expected_prefix = "PRAGMA foreign_keys"; break;
+                case OpType::AddColumn:     expected_prefix = "ALTER TABLE"; break;
+                case OpType::CreateIndex:   expected_prefix = "CREATE"; break;
+                case OpType::DropIndex:     expected_prefix = "DROP INDEX"; break;
+                case OpType::CreateView:    expected_prefix = "CREATE VIEW"; break;
+                case OpType::DropView:      expected_prefix = "DROP VIEW"; break;
+                case OpType::CreateTrigger: expected_prefix = "CREATE TRIGGER"; break;
+                case OpType::DropTrigger:   expected_prefix = "DROP TRIGGER"; break;
+            }
+            if (!starts_with(first_sql, expected_prefix)) {
+                throw JsonError(
+                    "Operation '" + to_string(op.type) + "' on '" +
+                    op.object_name + "': first SQL statement does not start with '" +
+                    expected_prefix + "'");
+            }
+        }
 
         plan.ops_.push_back(std::move(op));
     }

@@ -239,3 +239,153 @@ TEST_CASE("diff destructive guard") {
     auto plan = diff(current, empty);
     CHECK(plan.has_destructive_operations());
 }
+
+TEST_CASE("diff rejects adding CHECK constraint to existing table") {
+    Schema current = parse(
+        "CREATE TABLE items (id INTEGER PRIMARY KEY, price REAL);");
+    Schema desired = parse(
+        "CREATE TABLE items (id INTEGER PRIMARY KEY, price REAL, CHECK (price > 0));");
+
+    CHECK_THROWS_AS(diff(current, desired), BreakingChangeError);
+}
+
+TEST_CASE("diff COLLATE change triggers rebuild") {
+    Schema current = parse(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);");
+    Schema desired = parse(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT COLLATE NOCASE);");
+
+    auto plan = diff(current, desired);
+    REQUIRE(plan.operations().size() == 1);
+    CHECK(plan.operations()[0].type == OpType::RebuildTable);
+}
+
+TEST_CASE("diff GENERATED column change triggers rebuild") {
+    Schema current = parse(
+        "CREATE TABLE people ("
+        "  id INTEGER PRIMARY KEY,"
+        "  first_name TEXT,"
+        "  last_name TEXT,"
+        "  full_name TEXT GENERATED ALWAYS AS (first_name || ' ' || last_name) STORED"
+        ");");
+    Schema desired = parse(
+        "CREATE TABLE people ("
+        "  id INTEGER PRIMARY KEY,"
+        "  first_name TEXT,"
+        "  last_name TEXT,"
+        "  full_name TEXT GENERATED ALWAYS AS (last_name || ', ' || first_name) STORED"
+        ");");
+
+    auto plan = diff(current, desired);
+    REQUIRE(plan.operations().size() == 1);
+    CHECK(plan.operations()[0].type == OpType::RebuildTable);
+}
+
+TEST_CASE("diff STRICT change triggers rebuild") {
+    Schema current = parse(
+        "CREATE TABLE data (id INTEGER PRIMARY KEY, value TEXT);");
+    Schema desired = parse(
+        "CREATE TABLE data (id INTEGER PRIMARY KEY, value TEXT) STRICT;");
+
+    auto plan = diff(current, desired);
+    REQUIRE(plan.operations().size() == 1);
+    CHECK(plan.operations()[0].type == OpType::RebuildTable);
+}
+
+TEST_CASE("diff partial index") {
+    Schema current = parse(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, active INTEGER, name TEXT);"
+        "CREATE INDEX idx_active ON users(name) WHERE active = 1;");
+    Schema desired = parse(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, active INTEGER, name TEXT);"
+        "CREATE INDEX idx_active ON users(name) WHERE active = 0;");
+
+    auto plan = diff(current, desired);
+    // Should drop and recreate the index
+    bool has_drop = false, has_create = false;
+    for (const auto& op : plan.operations()) {
+        if (op.type == OpType::DropIndex && op.object_name == "idx_active") has_drop = true;
+        if (op.type == OpType::CreateIndex && op.object_name == "idx_active") has_create = true;
+    }
+    CHECK(has_drop);
+    CHECK(has_create);
+}
+
+TEST_CASE("diff expression index added") {
+    Schema current = parse(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);");
+    Schema desired = parse(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);"
+        "CREATE INDEX idx_name_len ON users(length(name));");
+
+    auto plan = diff(current, desired);
+    REQUIRE(plan.operations().size() == 1);
+    CHECK(plan.operations()[0].type == OpType::CreateIndex);
+    CHECK(plan.operations()[0].object_name == "idx_name_len");
+}
+
+TEST_CASE("diff partial index extracted correctly") {
+    Schema s = parse(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, active INTEGER, name TEXT);"
+        "CREATE INDEX idx_active ON users(name) WHERE active = 1;");
+
+    const auto& idx = s.indexes.at("idx_active");
+    CHECK(idx.where_clause == "active = 1");
+    CHECK(idx.columns == std::vector<std::string>{"name"});
+}
+
+TEST_CASE("diff expression index uses expr placeholder") {
+    Schema s = parse(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);"
+        "CREATE INDEX idx_name_len ON users(length(name));");
+
+    const auto& idx = s.indexes.at("idx_name_len");
+    CHECK(idx.columns == std::vector<std::string>{"<expr>"});
+}
+
+TEST_CASE("diff view dependency ordering") {
+    Schema current;
+    Schema desired = parse(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);"
+        "CREATE VIEW base_users AS SELECT id, name FROM users;"
+        "CREATE VIEW active_users AS SELECT * FROM base_users;");
+
+    auto plan = diff(current, desired);
+
+    // Find the create view operations
+    int base_pos = -1, active_pos = -1;
+    for (size_t i = 0; i < plan.operations().size(); ++i) {
+        if (plan.operations()[i].type == OpType::CreateView) {
+            if (plan.operations()[i].object_name == "base_users") base_pos = static_cast<int>(i);
+            if (plan.operations()[i].object_name == "active_users") active_pos = static_cast<int>(i);
+        }
+    }
+    REQUIRE(base_pos >= 0);
+    REQUIRE(active_pos >= 0);
+    // base_users must be created before active_users
+    CHECK(base_pos < active_pos);
+}
+
+TEST_CASE("diff view dependency ordering - drops") {
+    Schema current = parse(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);"
+        "CREATE VIEW base_users AS SELECT id, name FROM users;"
+        "CREATE VIEW active_users AS SELECT * FROM base_users;");
+    Schema desired = parse(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);");
+
+    auto plan = diff(current, desired);
+
+    // Find the drop view operations
+    int base_pos = -1, active_pos = -1;
+    for (size_t i = 0; i < plan.operations().size(); ++i) {
+        if (plan.operations()[i].type == OpType::DropView) {
+            if (plan.operations()[i].object_name == "base_users") base_pos = static_cast<int>(i);
+            if (plan.operations()[i].object_name == "active_users") active_pos = static_cast<int>(i);
+        }
+    }
+    REQUIRE(base_pos >= 0);
+    REQUIRE(active_pos >= 0);
+    // active_users (dependent) must be dropped before base_users (dependency)
+    CHECK(active_pos < base_pos);
+}

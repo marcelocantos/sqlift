@@ -121,3 +121,113 @@ TEST_CASE("parse composite primary key") {
     CHECK(t.columns[0].pk == 1);
     CHECK(t.columns[1].pk == 2);
 }
+
+TEST_CASE("parse column with COLLATE NOCASE") {
+    Schema s = parse(
+        "CREATE TABLE users ("
+        "  id INTEGER PRIMARY KEY,"
+        "  name TEXT COLLATE NOCASE"
+        ");");
+
+    const auto& t = s.tables.at("users");
+    REQUIRE(t.columns.size() == 2);
+    CHECK(t.columns[1].name == "name");
+    CHECK(t.columns[1].collation == "NOCASE");
+    // Default collation should be empty
+    CHECK(t.columns[0].collation.empty());
+}
+
+TEST_CASE("parse table with CHECK constraint") {
+    Schema s = parse(
+        "CREATE TABLE items ("
+        "  id INTEGER PRIMARY KEY,"
+        "  price REAL NOT NULL,"
+        "  CHECK (price > 0)"
+        ");");
+
+    const auto& t = s.tables.at("items");
+    REQUIRE(t.check_constraints.size() == 1);
+    CHECK(t.check_constraints[0].name.empty());
+    CHECK(t.check_constraints[0].expression == "price > 0");
+}
+
+TEST_CASE("parse table with named CHECK constraint") {
+    Schema s = parse(
+        "CREATE TABLE items ("
+        "  id INTEGER PRIMARY KEY,"
+        "  price REAL NOT NULL,"
+        "  CONSTRAINT positive_price CHECK (price > 0)"
+        ");");
+
+    const auto& t = s.tables.at("items");
+    REQUIRE(t.check_constraints.size() == 1);
+    CHECK(t.check_constraints[0].name == "positive_price");
+    CHECK(t.check_constraints[0].expression == "price > 0");
+}
+
+TEST_CASE("parse stored generated column") {
+    Schema s = parse(
+        "CREATE TABLE people ("
+        "  id INTEGER PRIMARY KEY,"
+        "  first_name TEXT,"
+        "  last_name TEXT,"
+        "  full_name TEXT GENERATED ALWAYS AS (first_name || ' ' || last_name) STORED"
+        ");");
+
+    const auto& t = s.tables.at("people");
+    REQUIRE(t.columns.size() == 4);
+    CHECK(t.columns[3].name == "full_name");
+    CHECK(t.columns[3].generated == 3);  // stored
+    CHECK(t.columns[3].generated_expr == "first_name || ' ' || last_name");
+}
+
+TEST_CASE("parse virtual generated column") {
+    Schema s = parse(
+        "CREATE TABLE products ("
+        "  id INTEGER PRIMARY KEY,"
+        "  price REAL,"
+        "  tax REAL GENERATED ALWAYS AS (price * 0.1) VIRTUAL"
+        ");");
+
+    const auto& t = s.tables.at("products");
+    REQUIRE(t.columns.size() == 3);
+    CHECK(t.columns[2].name == "tax");
+    CHECK(t.columns[2].generated == 2);  // virtual
+    CHECK(t.columns[2].generated_expr == "price * 0.1");
+}
+
+TEST_CASE("parse STRICT table") {
+    Schema s = parse(
+        "CREATE TABLE data ("
+        "  id INTEGER PRIMARY KEY,"
+        "  value TEXT NOT NULL"
+        ") STRICT;");
+
+    const auto& t = s.tables.at("data");
+    CHECK(t.strict == true);
+    CHECK(t.without_rowid == false);
+}
+
+TEST_CASE("parse STRICT WITHOUT ROWID table") {
+    Schema s = parse(
+        "CREATE TABLE data ("
+        "  id INTEGER PRIMARY KEY,"
+        "  value TEXT NOT NULL"
+        ") STRICT, WITHOUT ROWID;");
+
+    const auto& t = s.tables.at("data");
+    CHECK(t.strict == true);
+    CHECK(t.without_rowid == true);
+}
+
+TEST_CASE("parse WITHOUT ROWID STRICT table") {
+    Schema s = parse(
+        "CREATE TABLE data ("
+        "  id INTEGER PRIMARY KEY,"
+        "  value TEXT NOT NULL"
+        ") WITHOUT ROWID, STRICT;");
+
+    const auto& t = s.tables.at("data");
+    CHECK(t.strict == true);
+    CHECK(t.without_rowid == true);
+}

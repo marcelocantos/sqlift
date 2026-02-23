@@ -126,6 +126,41 @@ TEST_CASE("apply FK violation includes parent table and rowid") {
     }
 }
 
+TEST_CASE("apply error recovery preserves database state") {
+    Database db(":memory:");
+    db.exec("PRAGMA foreign_keys=OFF;");
+    db.exec(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);"
+        "INSERT INTO users VALUES (1, 'Alice');"
+        "CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER REFERENCES users(id));"
+        "INSERT INTO orders VALUES (1, 1);"
+        "INSERT INTO orders VALUES (2, 999);");  // orphan FK
+    db.exec("PRAGMA foreign_keys=ON;");
+
+    Schema current = extract(db);
+    // Change column type on orders to trigger a rebuild — FK is unchanged
+    // so no BreakingChangeError, but the orphan data causes an FK violation.
+    Schema desired = parse(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);"
+        "CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id BIGINT REFERENCES users(id));");
+
+    auto plan = diff(current, desired);
+
+    // This should fail during the FK check step of rebuild
+    CHECK_THROWS_AS(apply(db, plan), ApplyError);
+
+    // Verify the original orders table still has its data
+    Statement count_stmt(db, "SELECT count(*) FROM orders");
+    REQUIRE(count_stmt.step());
+    CHECK(count_stmt.column_int(0) == 2);
+
+    // Verify no temp table left behind
+    Statement temp_check(db,
+        "SELECT count(*) FROM sqlite_master WHERE name LIKE '%sqlift_new%'");
+    REQUIRE(temp_check.step());
+    CHECK(temp_check.column_int(0) == 0);
+}
+
 TEST_CASE("apply detects drift") {
     Database db(":memory:");
 
