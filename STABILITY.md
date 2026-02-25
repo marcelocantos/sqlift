@@ -12,9 +12,9 @@ product (e.g. `sqlift2`). The pre-1.0 period exists to get these surfaces right.
 ### Version macros
 
 ```cpp
-#define SQLIFT_VERSION       "0.5.0"
+#define SQLIFT_VERSION       "0.6.0"
 #define SQLIFT_VERSION_MAJOR 0
-#define SQLIFT_VERSION_MINOR 5
+#define SQLIFT_VERSION_MINOR 6
 #define SQLIFT_VERSION_PATCH 0
 ```
 
@@ -60,8 +60,8 @@ struct Table {
 };
 ```
 
-**Stable.** Fields have only grown additively (check_constraints, strict added
-in v0.5.0). Equality excludes raw_sql by design.
+**Stable.** Fields have only grown additively (check_constraints and strict
+added in v0.6.0). Equality excludes raw_sql by design.
 
 ```cpp
 enum class GeneratedType { Normal = 0, Virtual = 2, Stored = 3 };
@@ -80,7 +80,7 @@ struct Column {
 ```
 
 **Stable.** The `generated` field was changed from `int` to `GeneratedType`
-enum in v0.5.0. Enum values match SQLite's `table_xinfo` PRAGMA.
+enum in v0.6.0. Enum values match SQLite's `table_xinfo` PRAGMA.
 
 ```cpp
 struct CheckConstraint {
@@ -237,7 +237,7 @@ widening int to int64_t in v0.4.0.
 
 ### Internal utilities
 
-`sha256()` was moved to a file-local function in sqlift.cpp in v0.5.0. It is no
+`sha256()` was moved to a file-local function in sqlift.cpp in v0.6.0. It is no
 longer part of the public API.
 
 ## Gaps and prerequisites
