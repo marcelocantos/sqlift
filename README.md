@@ -44,7 +44,7 @@ sqlift::apply(db, plan);
 - **Destructive operation guard** -- dropping tables or columns requires explicit opt-in
 - **Drift detection** -- detects out-of-band schema changes
 - **Two files** -- the entire library is `sqlift.h` + `sqlift.cpp`
-- **No runtime dependencies** beyond SQLite3
+- **No external dependencies** beyond SQLite3 (nlohmann/json is vendored)
 
 ## Installation
 

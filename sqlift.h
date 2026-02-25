@@ -120,19 +120,17 @@ private:
 };
 
 
-// --- hash.h ---
-
-
-
-
-// Minimal SHA-256 implementation for schema hashing.
-std::string sha256(const std::string& input);
-
-
 // --- schema.h ---
 
 
 
+
+// Matches SQLite's table_xinfo hidden field values.
+enum class GeneratedType {
+    Normal  = 0,
+    Virtual = 2,
+    Stored  = 3,
+};
 
 struct Column {
     std::string name;
@@ -141,7 +139,7 @@ struct Column {
     std::string default_value;   // Raw SQL expression; empty if no default.
     int pk = 0;                  // 0 = not PK, 1+ = position in composite PK.
     std::string collation;       // e.g. "NOCASE"; empty = default (BINARY).
-    int generated = 0;           // 0=normal, 2=virtual, 3=stored (matches table_xinfo hidden field).
+    GeneratedType generated = GeneratedType::Normal;
     std::string generated_expr;  // e.g. "first_name || ' ' || last_name"; empty if not generated.
 
     bool operator==(const Column&) const = default;

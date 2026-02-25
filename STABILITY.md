@@ -64,6 +64,8 @@ struct Table {
 in v0.5.0). Equality excludes raw_sql by design.
 
 ```cpp
+enum class GeneratedType { Normal = 0, Virtual = 2, Stored = 3 };
+
 struct Column {
     std::string name;
     std::string type;
@@ -71,17 +73,14 @@ struct Column {
     std::string default_value;
     int pk = 0;
     std::string collation;
-    int generated = 0;
+    GeneratedType generated = GeneratedType::Normal;
     std::string generated_expr;
     bool operator==(const Column&) const = default;
 };
 ```
 
-**Needs review.** The `generated` field uses magic integers (0=normal,
-2=virtual, 3=stored) inherited from SQLite's `table_xinfo` PRAGMA. An enum
-would be clearer and safer, but changing this after 1.0 would be a breaking
-change. Decision needed: keep the int (matches SQLite directly) or switch to an
-enum before 1.0.
+**Stable.** The `generated` field was changed from `int` to `GeneratedType`
+enum in v0.5.0. Enum values match SQLite's `table_xinfo` PRAGMA.
 
 ```cpp
 struct CheckConstraint {
@@ -236,51 +235,15 @@ public:
 **Stable.** These are thin RAII wrappers. The only change since v0.1.0 was
 widening int to int64_t in v0.4.0.
 
-### Internal surface exposed publicly
+### Internal utilities
 
-```cpp
-std::string sha256(const std::string& input);
-```
-
-**Needs review.** This is an implementation detail (used for schema hashing and
-drift detection) that happens to be declared in the public header. It works, but
-exposing it implies a stability commitment for a function that has nothing to do
-with schema migration. Options: keep it public (it's harmless), or move it to an
-anonymous namespace in sqlift.cpp before 1.0.
+`sha256()` was moved to a file-local function in sqlift.cpp in v0.5.0. It is no
+longer part of the public API.
 
 ## Gaps and prerequisites
 
-### Documentation
-
-- **Reference docs are stale.** `docs/reference.md` does not document:
-  - `Column::collation`, `Column::generated`, `Column::generated_expr`
-  - `CheckConstraint` struct
-  - `Table::check_constraints`, `Table::strict`
-  - `BreakingChangeError` exception
-  - `Statement::column_int` / `bind_int` as `int64_t` (docs still show `int`)
-- **Guide is stale.** `docs/guide.md` does not mention:
-  - CHECK constraint support
-  - COLLATE clause support
-  - GENERATED column support
-  - STRICT table support
-  - Breaking change detection
-  - Topological sort for view/trigger ordering
-  - JSON serialization/deserialization
-- **README claims "No runtime dependencies beyond SQLite3"** but nlohmann/json
-  is vendored and compiled into sqlift.cpp. Should clarify that it is vendored
-  (no external dependency) or list it explicitly.
-
-### API design decisions
-
-- **`Column::generated` uses magic ints.** See surface catalogue above. Decide
-  whether to keep or replace with an enum before 1.0.
-- **`sha256` is public.** Decide whether to keep or hide before 1.0.
-
-### Packaging
-
-- **nlohmann/json license attribution.** The library is MIT-licensed and
-  vendored but no attribution file exists in the repo. Add a THIRD_PARTY or
-  NOTICES file, or include the license alongside the vendored header.
+None. All documentation is current, API design decisions are resolved, and
+third-party attribution is in place (THIRD_PARTY_LICENSES.md).
 
 ## Out of scope for 1.0
 

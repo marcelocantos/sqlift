@@ -126,7 +126,6 @@ void Statement::bind_int(int param, int64_t value) {
 
 
 
-
 namespace {
 
 constexpr std::array<uint32_t, 64> K = {
@@ -155,8 +154,6 @@ inline uint32_t sigma0(uint32_t x) { return rotr(x, 2) ^ rotr(x, 13) ^ rotr(x, 2
 inline uint32_t sigma1(uint32_t x) { return rotr(x, 6) ^ rotr(x, 11) ^ rotr(x, 25); }
 inline uint32_t gamma0(uint32_t x) { return rotr(x, 7) ^ rotr(x, 18) ^ (x >> 3); }
 inline uint32_t gamma1(uint32_t x) { return rotr(x, 17) ^ rotr(x, 19) ^ (x >> 10); }
-
-} // namespace
 
 std::string sha256(const std::string& input) {
     // Pre-processing: pad message
@@ -205,6 +202,8 @@ std::string sha256(const std::string& input) {
     return oss.str();
 }
 
+} // namespace
+
 
 // --- schema.cpp ---
 
@@ -224,8 +223,8 @@ std::string Schema::hash() const {
                 << " PK=" << col.pk;
             if (!col.collation.empty())
                 oss << " COLLATE=" << col.collation;
-            if (col.generated != 0)
-                oss << " GENERATED=" << col.generated;
+            if (col.generated != GeneratedType::Normal)
+                oss << " GENERATED=" << static_cast<int>(col.generated);
             if (!col.generated_expr.empty())
                 oss << " EXPR=" << col.generated_expr;
             oss << '\n';
@@ -533,7 +532,7 @@ Schema extract(sqlite3* db) {
                 col.notnull = col_stmt.column_int(3) != 0;
                 col.default_value = col_stmt.column_text(4);
                 col.pk = static_cast<int>(col_stmt.column_int(5));
-                col.generated = static_cast<int>(col_stmt.column_int(6));
+                col.generated = static_cast<GeneratedType>(col_stmt.column_int(6));
                 table.columns.push_back(std::move(col));
             }
 
@@ -681,7 +680,7 @@ bool can_add_column(const Column& col) {
     // - Cannot be a generated column
     if (col.pk != 0) return false;
     if (col.notnull && col.default_value.empty()) return false;
-    if (col.generated != 0) return false;
+    if (col.generated != GeneratedType::Normal) return false;
     return true;
 }
 
@@ -839,7 +838,7 @@ std::vector<std::string> rebuild_table_sql(
     std::set<std::string> generated_col_names;
     for (const auto& col : desired.columns) {
         desired_col_names.insert(col.name);
-        if (col.generated != 0)
+        if (col.generated != GeneratedType::Normal)
             generated_col_names.insert(col.name);
     }
     for (const auto& col : current.columns) {

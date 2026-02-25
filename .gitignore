@@ -9,3 +9,5 @@ Thumbs.db
 .idea/
 *~
 *.swp
+.claude/
+.mk/

@@ -52,12 +52,22 @@ if (!plan.empty())
 ### Schema types
 
 ```cpp
+enum class GeneratedType { Normal = 0, Virtual = 2, Stored = 3 };
+
 struct Column {
     string name;
     string type;            // Uppercase ("INTEGER", "TEXT"). Empty if untyped.
     bool notnull = false;
     string default_value;   // Raw SQL expression. Empty if none.
     int pk = 0;             // 0 = not PK. 1+ = position in composite PK.
+    string collation;       // e.g. "NOCASE". Empty = default (BINARY).
+    GeneratedType generated = GeneratedType::Normal;
+    string generated_expr;  // e.g. "first_name || ' ' || last_name". Empty if not generated.
+};
+
+struct CheckConstraint {
+    string name;        // Empty if unnamed.
+    string expression;  // e.g. "age > 0"
 };
 
 struct ForeignKey {
@@ -70,10 +80,12 @@ struct ForeignKey {
 
 struct Table {
     string name;
-    vector<Column> columns;           // Ordered by column ID.
+    vector<Column> columns;                    // Ordered by column ID.
     vector<ForeignKey> foreign_keys;
+    vector<CheckConstraint> check_constraints;
     bool without_rowid = false;
-    string raw_sql;                   // Excluded from operator==.
+    bool strict = false;
+    string raw_sql;                            // Excluded from operator==.
 };
 
 struct Index {
@@ -164,7 +176,7 @@ All inherit from `sqlift::Error` (inherits `std::runtime_error`):
 - **12-step table rebuild**: Any other table change uses SQLite's recommended rebuild (disable FKs, savepoint, create new, copy data, drop old, rename, recreate indexes/triggers/views, FK check, release, re-enable FKs).
 - **Destructive guard**: `apply()` throws `DestructiveError` unless `{.allow_destructive = true}`.
 - **Drift detection**: Stores SHA-256 hash in `_sqlift_state` table after each apply. Throws `DriftError` if schema changed outside sqlift.
-- **Breaking change detection**: `diff()` throws `BreakingChangeError` for schema changes whose success depends on existing data — i.e., changes that might work on one database but fail on another. Detected cases: (1) existing nullable column becomes NOT NULL, (2) new FK constraint added to existing table, (3) new NOT NULL column without DEFAULT. The engineer must find a safe alternative (e.g., create a new table and migrate data at the application level).
+- **Breaking change detection**: `diff()` throws `BreakingChangeError` for schema changes whose success depends on existing data — i.e., changes that might work on one database but fail on another. Detected cases: (1) existing nullable column becomes NOT NULL, (2) new FK constraint added to existing table, (3) new CHECK constraint added to existing table, (4) new NOT NULL column without DEFAULT. The engineer must find a safe alternative (e.g., create a new table and migrate data at the application level).
 - **No rename detection**: A removed + added column is always a drop + add.
 - **Operation order**: Drop triggers/views/indexes, then table ops, then create indexes/views/triggers.
 - **`raw_sql` excluded from equality**: SQLite doesn't update `sqlite_master.sql` after `ALTER TABLE ADD COLUMN`, so Table/Index equality is structural only.

@@ -177,7 +177,7 @@ TEST_CASE("parse stored generated column") {
     const auto& t = s.tables.at("people");
     REQUIRE(t.columns.size() == 4);
     CHECK(t.columns[3].name == "full_name");
-    CHECK(t.columns[3].generated == 3);  // stored
+    CHECK(t.columns[3].generated == sqlift::GeneratedType::Stored);
     CHECK(t.columns[3].generated_expr == "first_name || ' ' || last_name");
 }
 
@@ -192,7 +192,7 @@ TEST_CASE("parse virtual generated column") {
     const auto& t = s.tables.at("products");
     REQUIRE(t.columns.size() == 3);
     CHECK(t.columns[2].name == "tax");
-    CHECK(t.columns[2].generated == 2);  // virtual
+    CHECK(t.columns[2].generated == sqlift::GeneratedType::Virtual);
     CHECK(t.columns[2].generated_expr == "price * 0.1");
 }
 

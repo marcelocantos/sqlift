@@ -134,6 +134,36 @@ This is a safety net. In development you will typically pass
 `allow_destructive = true`. In production, the refusal gives you a chance to
 review the plan and confirm that dropping data is intentional.
 
+## Breaking change detection
+
+`diff()` detects schema changes whose success depends on existing data --
+changes that might work on an empty database but fail on a populated one. When
+detected, it throws a `BreakingChangeError` instead of producing a plan.
+
+Detected cases:
+
+- **Nullable to NOT NULL** -- an existing nullable column becomes NOT NULL.
+  Rows with NULL values would cause the rebuild to fail.
+- **New foreign key** -- adding an FK constraint to an existing table. Orphaned
+  rows would cause the FK check to fail.
+- **New CHECK constraint** -- adding a CHECK constraint to an existing table.
+  Existing rows may violate the constraint.
+- **New NOT NULL column without DEFAULT** -- adding a column that is NOT NULL
+  with no DEFAULT value. Existing rows cannot be populated.
+
+```cpp
+try {
+    auto plan = sqlift::diff(current, desired);
+} catch (const sqlift::BreakingChangeError& e) {
+    // e.what() lists the specific violations
+    std::cerr << e.what() << "\n";
+}
+```
+
+The safe alternative is typically a two-step migration: add a new table with
+the desired schema, migrate data at the application level, then retire the old
+table.
+
 ## Drift detection
 
 sqlift stores a SHA-256 hash of the schema in a `_sqlift_state` table after
@@ -155,6 +185,72 @@ bugs that issue raw DDL.
 
 The `_sqlift_state` table is automatically excluded from schema extraction, so
 it does not appear in diffs or interfere with your schema definitions.
+
+## CHECK constraints
+
+sqlift detects `CHECK` constraints in your table definitions, both unnamed and
+named (via `CONSTRAINT name CHECK(...)`):
+
+```sql
+CREATE TABLE products (
+    id INTEGER PRIMARY KEY,
+    price REAL CHECK(price > 0),
+    CONSTRAINT valid_name CHECK(length(name) > 0)
+);
+```
+
+CHECK constraints are included in structural equality comparisons. Changing a
+CHECK expression triggers a table rebuild.
+
+Adding a CHECK constraint to an existing table is a breaking change -- existing
+rows may violate the new constraint. `diff()` throws `BreakingChangeError` in
+this case.
+
+## COLLATE clauses
+
+Column collation sequences (e.g. `COLLATE NOCASE`) are extracted and compared.
+The default collation (BINARY) is stored as an empty string. Changing a
+column's collation triggers a table rebuild.
+
+```sql
+CREATE TABLE users (
+    id INTEGER PRIMARY KEY,
+    name TEXT COLLATE NOCASE
+);
+```
+
+## GENERATED columns
+
+sqlift supports `GENERATED ALWAYS AS (expr) STORED` and
+`GENERATED ALWAYS AS (expr) VIRTUAL` columns:
+
+```sql
+CREATE TABLE people (
+    id INTEGER PRIMARY KEY,
+    first_name TEXT,
+    last_name TEXT,
+    full_name TEXT GENERATED ALWAYS AS (first_name || ' ' || last_name) STORED
+);
+```
+
+Generated columns cannot be added via `ALTER TABLE ADD COLUMN` -- they always
+require a table rebuild. During rebuilds, generated columns are excluded from
+the `INSERT INTO ... SELECT` data copy since their values are computed
+automatically.
+
+## STRICT tables
+
+sqlift detects the `STRICT` table option:
+
+```sql
+CREATE TABLE data (
+    id INTEGER PRIMARY KEY,
+    value TEXT NOT NULL
+) STRICT;
+```
+
+The `strict` flag is included in structural equality. Changing it triggers a
+table rebuild.
 
 ## How changes are applied
 
@@ -222,6 +318,28 @@ sqlift orders operations to avoid constraint violations:
 Within table operations, new tables are created before tables that reference
 them via foreign keys.
 
+Views and triggers are ordered by dependency analysis -- sqlift extracts SQL
+references from each object and uses topological sort (Kahn's algorithm) to
+ensure dependents are dropped before their dependencies and created after them.
+A circular dependency throws `DiffError`.
+
+## JSON serialization
+
+Migration plans can be serialized to JSON for storage, review, or transmission
+to another machine:
+
+```cpp
+// Serialize
+std::string json = sqlift::to_json(plan);
+
+// Deserialize and apply elsewhere
+sqlift::MigrationPlan restored = sqlift::from_json(json);
+sqlift::apply(db, restored);
+```
+
+The JSON format is versioned (`"version": 1`). `from_json()` validates all
+required fields and throws `JsonError` on any parsing or validation failure.
+
 ## What sqlift does not do
 
 **Rename detection.** If a column disappears and a new one appears, sqlift
@@ -275,5 +393,7 @@ derives from `std::runtime_error`):
 | `ApplyError` | SQL execution fails during `apply()` (e.g. FK violation) |
 | `DestructiveError` | Plan has destructive ops and `allow_destructive` is false |
 | `DriftError` | Schema was modified outside of sqlift since last apply |
+| `BreakingChangeError` | Schema change depends on existing data (see above) |
+| `JsonError` | Invalid JSON or missing fields in `from_json()` |
 
 All exceptions carry a descriptive `what()` message.

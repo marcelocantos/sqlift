@@ -39,7 +39,7 @@ Schema extract(sqlite3* db);
 ```
 
 Extract the current schema from a live SQLite database by querying
-`sqlite_master` and PRAGMAs (`table_info`, `foreign_key_list`, `index_info`).
+`sqlite_master` and PRAGMAs (`table_xinfo`, `foreign_key_list`, `index_info`).
 
 The `_sqlift_state` table and `sqlite_autoindex_*` entries are excluded.
 
@@ -125,19 +125,36 @@ the schema. Used internally for drift detection.
 ```cpp
 struct Table {
     std::string name;
-    std::vector<Column> columns;          // Ordered by column ID.
+    std::vector<Column> columns;                    // Ordered by column ID.
     std::vector<ForeignKey> foreign_keys;
+    std::vector<CheckConstraint> check_constraints;
     bool without_rowid = false;
-    std::string raw_sql;                  // Original CREATE TABLE from sqlite_master.
+    bool strict = false;
+    std::string raw_sql;                            // Original CREATE TABLE from sqlite_master.
 };
 ```
 
 Equality comparison is structural -- it compares `name`, `columns`,
-`foreign_keys`, and `without_rowid`. The `raw_sql` field is excluded from
-equality because SQLite does not update it after `ALTER TABLE ADD COLUMN`.
+`foreign_keys`, `check_constraints`, `without_rowid`, and `strict`. The
+`raw_sql` field is excluded from equality because SQLite does not update it
+after `ALTER TABLE ADD COLUMN`.
 
 `raw_sql` is used during table rebuilds to reconstruct the desired table
 structure.
+
+---
+
+### `GeneratedType`
+
+```cpp
+enum class GeneratedType {
+    Normal  = 0,   // Not a generated column.
+    Virtual = 2,   // GENERATED ALWAYS AS (...) VIRTUAL
+    Stored  = 3,   // GENERATED ALWAYS AS (...) STORED
+};
+```
+
+Values match SQLite's `table_xinfo` hidden field.
 
 ---
 
@@ -146,10 +163,24 @@ structure.
 ```cpp
 struct Column {
     std::string name;
-    std::string type;           // Uppercase (e.g. "INTEGER", "TEXT"). Empty if untyped.
+    std::string type;            // Uppercase (e.g. "INTEGER", "TEXT"). Empty if untyped.
     bool notnull = false;
-    std::string default_value;  // Raw SQL expression (e.g. "0", "'hello'"). Empty if none.
-    int pk = 0;                 // 0 = not primary key. 1+ = position in composite PK.
+    std::string default_value;   // Raw SQL expression (e.g. "0", "'hello'"). Empty if none.
+    int pk = 0;                  // 0 = not primary key. 1+ = position in composite PK.
+    std::string collation;       // e.g. "NOCASE". Empty = default (BINARY).
+    GeneratedType generated = GeneratedType::Normal;
+    std::string generated_expr;  // e.g. "first_name || ' ' || last_name". Empty if not generated.
+};
+```
+
+---
+
+### `CheckConstraint`
+
+```cpp
+struct CheckConstraint {
+    std::string name;        // Empty if unnamed.
+    std::string expression;  // e.g. "age > 0"
 };
 ```
 
@@ -377,8 +408,14 @@ std::runtime_error
     sqlift::ApplyError
     sqlift::DriftError
     sqlift::DestructiveError
+    sqlift::BreakingChangeError
     sqlift::JsonError
 ```
+
+- `BreakingChangeError` -- thrown by `diff()` when the desired schema contains
+  changes whose success depends on existing data. Detected cases: existing
+  nullable column becomes NOT NULL, new FK constraint on existing table, new
+  CHECK constraint on existing table, new NOT NULL column without DEFAULT.
 
 ---
 
@@ -426,11 +463,11 @@ public:
 
     bool step();
 
-    int column_int(int col) const;
+    int64_t column_int(int col) const;
     std::string column_text(int col) const;
 
     void bind_text(int param, const std::string& value);
-    void bind_int(int param, int value);
+    void bind_int(int param, int64_t value);
 
     sqlite3_stmt* get() const;
 };
