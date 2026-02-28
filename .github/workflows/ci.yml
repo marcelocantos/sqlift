@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install mk
+        run: |
+          MK_VERSION=$(gh release view --repo marcelocantos/mk --json tagName -q .tagName)
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            ARCH="darwin-arm64"
+          else
+            ARCH="linux-amd64"
+          fi
+          curl -sL "https://github.com/marcelocantos/mk/releases/download/${MK_VERSION}/mk-${MK_VERSION#v}-${ARCH}.tar.gz" | sudo tar xz -C /usr/local/bin mk
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Build and test
+        run: mk test
+
+      - name: Sanitizer test
+        run: mk sanitize

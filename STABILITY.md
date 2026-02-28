@@ -12,9 +12,9 @@ product (e.g. `sqlift2`). The pre-1.0 period exists to get these surfaces right.
 ### Version macros
 
 ```cpp
-#define SQLIFT_VERSION       "0.6.0"
+#define SQLIFT_VERSION       "0.7.0"
 #define SQLIFT_VERSION_MAJOR 0
-#define SQLIFT_VERSION_MINOR 6
+#define SQLIFT_VERSION_MINOR 7
 #define SQLIFT_VERSION_PATCH 0
 ```
 
