@@ -161,6 +161,41 @@ TEST_CASE("apply error recovery preserves database state") {
     CHECK(temp_check.column_int(0) == 0);
 }
 
+TEST_CASE("migration_version starts at 0") {
+    Database db(":memory:");
+    CHECK(migration_version(db) == 0);
+}
+
+TEST_CASE("migration_version increments on apply") {
+    Database db(":memory:");
+
+    // First migration
+    Schema v1 = parse("CREATE TABLE users (id INTEGER PRIMARY KEY);");
+    apply(db, diff(Schema{}, v1));
+    CHECK(migration_version(db) == 1);
+
+    // Second migration
+    Schema v2 = parse("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);");
+    Schema current = extract(db);
+    apply(db, diff(current, v2));
+    CHECK(migration_version(db) == 2);
+}
+
+TEST_CASE("migration_version survives no-op apply") {
+    Database db(":memory:");
+
+    Schema v1 = parse("CREATE TABLE users (id INTEGER PRIMARY KEY);");
+    apply(db, diff(Schema{}, v1));
+    CHECK(migration_version(db) == 1);
+
+    // No-op (same schema) — should not increment
+    Schema current = extract(db);
+    auto plan = diff(current, v1);
+    CHECK(plan.empty());
+    // Version unchanged since apply() returns early for empty plans
+    CHECK(migration_version(db) == 1);
+}
+
 TEST_CASE("apply detects drift") {
     Database db(":memory:");
 

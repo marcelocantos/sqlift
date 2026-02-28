@@ -229,8 +229,11 @@ std::string Schema::hash() const {
                 oss << " EXPR=" << col.generated_expr;
             oss << '\n';
         }
+        if (!table.pk_constraint_name.empty())
+            oss << "  PK_NAME=" << table.pk_constraint_name << '\n';
         for (const auto& fk : table.foreign_keys) {
             oss << "  FK";
+            if (!fk.constraint_name.empty()) oss << " NAME=" << fk.constraint_name;
             for (const auto& c : fk.from_columns) oss << ' ' << c;
             oss << " -> " << fk.to_table << '(';
             for (size_t i = 0; i < fk.to_columns.size(); ++i) {
@@ -305,12 +308,24 @@ std::string trim(const std::string& s) {
     return s.substr(start, end - start + 1);
 }
 
+std::string strip_quotes(const std::string& s) {
+    if (s.size() >= 2 &&
+        ((s.front() == '"' && s.back() == '"') ||
+         (s.front() == '[' && s.back() == ']') ||
+         (s.front() == '`' && s.back() == '`'))) {
+        return s.substr(1, s.size() - 2);
+    }
+    return s;
+}
+
 // Parse the body of a CREATE TABLE statement to extract CHECK constraints
 // and GENERATED ALWAYS AS expressions.
 // Returns a pair: (check_constraints, column_name -> generated_expr map).
 struct ParsedTableBody {
     std::vector<CheckConstraint> checks;
     std::map<std::string, std::string> generated_exprs;
+    std::string pk_constraint_name;
+    std::map<std::string, std::string> fk_constraint_names;  // key: comma-joined from_columns
 };
 
 ParsedTableBody parse_create_table_body(const std::string& raw_sql) {
@@ -376,20 +391,12 @@ ParsedTableBody parse_create_table_body(const std::string& raw_sql) {
                     chk.expression = trim(def.substr(paren + 1, expr_end - paren - 1));
             }
         } else if (starts_with(upper_def, "CONSTRAINT")) {
-            // CONSTRAINT name CHECK(...)
+            // CONSTRAINT name CHECK/PRIMARY KEY/FOREIGN KEY(...)
             auto check_pos = upper_def.find("CHECK");
             if (check_pos != std::string::npos) {
                 is_check = true;
                 // Extract constraint name: between CONSTRAINT and CHECK
-                std::string name_part = trim(def.substr(10, check_pos - 10));
-                // Strip quotes if present
-                if (name_part.size() >= 2 &&
-                    ((name_part.front() == '"' && name_part.back() == '"') ||
-                     (name_part.front() == '[' && name_part.back() == ']') ||
-                     (name_part.front() == '`' && name_part.back() == '`'))) {
-                    name_part = name_part.substr(1, name_part.size() - 2);
-                }
-                chk.name = name_part;
+                chk.name = strip_quotes(trim(def.substr(10, check_pos - 10)));
                 // Extract expression
                 auto paren = def.find('(', check_pos);
                 if (paren != std::string::npos) {
@@ -405,6 +412,43 @@ ParsedTableBody parse_create_table_body(const std::string& raw_sql) {
                     if (expr_end != std::string::npos)
                         chk.expression = trim(def.substr(paren + 1, expr_end - paren - 1));
                 }
+            } else {
+                auto pk_pos = upper_def.find("PRIMARY KEY");
+                auto fk_pos = upper_def.find("FOREIGN KEY");
+                if (pk_pos != std::string::npos) {
+                    result.pk_constraint_name =
+                        strip_quotes(trim(def.substr(10, pk_pos - 10)));
+                } else if (fk_pos != std::string::npos) {
+                    std::string name_part =
+                        strip_quotes(trim(def.substr(10, fk_pos - 10)));
+                    // Extract from_columns from FOREIGN KEY(col1, col2)
+                    auto paren = def.find('(', fk_pos);
+                    if (paren != std::string::npos) {
+                        int d = 0;
+                        size_t cols_end = std::string::npos;
+                        for (size_t i = paren; i < def.size(); ++i) {
+                            if (def[i] == '(') ++d;
+                            else if (def[i] == ')') {
+                                --d;
+                                if (d == 0) { cols_end = i; break; }
+                            }
+                        }
+                        if (cols_end != std::string::npos) {
+                            std::string cols_str = def.substr(paren + 1, cols_end - paren - 1);
+                            std::string key;
+                            std::istringstream css(cols_str);
+                            std::string col;
+                            bool first = true;
+                            while (std::getline(css, col, ',')) {
+                                if (!first) key += ',';
+                                key += strip_quotes(trim(col));
+                                first = false;
+                            }
+                            result.fk_constraint_names[key] = name_part;
+                        }
+                    }
+                }
+                continue;
             }
         }
 
@@ -578,6 +622,19 @@ Schema extract(sqlite3* db) {
             }
             for (auto& [_, fk] : fk_map)
                 table.foreign_keys.push_back(std::move(fk));
+
+            // Populate constraint names from parsed raw_sql
+            table.pk_constraint_name = std::move(parsed.pk_constraint_name);
+            for (auto& fk : table.foreign_keys) {
+                std::string key;
+                for (size_t i = 0; i < fk.from_columns.size(); ++i) {
+                    if (i > 0) key += ',';
+                    key += fk.from_columns[i];
+                }
+                auto it = parsed.fk_constraint_names.find(key);
+                if (it != parsed.fk_constraint_names.end())
+                    fk.constraint_name = it->second;
+            }
 
             schema.tables[table.name] = std::move(table);
         }
@@ -1326,6 +1383,14 @@ void store_schema_hash(sqlite3* db, const std::string& hash) {
         "INSERT OR REPLACE INTO _sqlift_state (key, value) VALUES ('schema_hash', ?)");
     stmt.bind_text(1, hash);
     stmt.step();
+
+    // Increment migration version counter
+    Statement ver_stmt(db,
+        "INSERT OR REPLACE INTO _sqlift_state (key, value) "
+        "VALUES ('migration_version', COALESCE("
+        "(SELECT CAST(value AS INTEGER) + 1 FROM _sqlift_state "
+        "WHERE key='migration_version'), 1))");
+    ver_stmt.step();
 }
 
 std::string load_schema_hash(sqlite3* db) {
@@ -1394,6 +1459,22 @@ void apply(sqlite3* db, const MigrationPlan& plan, const ApplyOptions& opts) {
     store_schema_hash(db, after.hash());
 }
 
+int64_t migration_version(sqlite3* db) {
+    Statement check(db,
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='_sqlift_state'");
+    if (!check.step()) return 0;
+
+    Statement stmt(db,
+        "SELECT value FROM _sqlift_state WHERE key='migration_version'");
+    if (stmt.step()) {
+        try {
+            return std::stoll(stmt.column_text(0));
+        } catch (...) {
+            return 0;
+        }
+    }
+    return 0;
+}
 
 
 // --- json.cpp ---

@@ -231,3 +231,75 @@ TEST_CASE("parse WITHOUT ROWID STRICT table") {
     CHECK(t.strict == true);
     CHECK(t.without_rowid == true);
 }
+
+TEST_CASE("parse named PRIMARY KEY constraint") {
+    Schema s = parse(
+        "CREATE TABLE user_roles ("
+        "  user_id INTEGER,"
+        "  role_id INTEGER,"
+        "  CONSTRAINT pk_user_roles PRIMARY KEY (user_id, role_id)"
+        ");");
+
+    const auto& t = s.tables.at("user_roles");
+    CHECK(t.pk_constraint_name == "pk_user_roles");
+    CHECK(t.columns[0].pk == 1);
+    CHECK(t.columns[1].pk == 2);
+}
+
+TEST_CASE("parse unnamed PRIMARY KEY constraint") {
+    Schema s = parse(
+        "CREATE TABLE user_roles ("
+        "  user_id INTEGER,"
+        "  role_id INTEGER,"
+        "  PRIMARY KEY (user_id, role_id)"
+        ");");
+
+    const auto& t = s.tables.at("user_roles");
+    CHECK(t.pk_constraint_name.empty());
+}
+
+TEST_CASE("parse named FOREIGN KEY constraint") {
+    Schema s = parse(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY);"
+        "CREATE TABLE posts ("
+        "  id INTEGER PRIMARY KEY,"
+        "  user_id INTEGER,"
+        "  CONSTRAINT fk_posts_user FOREIGN KEY (user_id) REFERENCES users(id)"
+        ");");
+
+    const auto& t = s.tables.at("posts");
+    REQUIRE(t.foreign_keys.size() == 1);
+    CHECK(t.foreign_keys[0].constraint_name == "fk_posts_user");
+    CHECK(t.foreign_keys[0].from_columns == std::vector<std::string>{"user_id"});
+    CHECK(t.foreign_keys[0].to_table == "users");
+}
+
+TEST_CASE("parse unnamed FOREIGN KEY constraint") {
+    Schema s = parse(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY);"
+        "CREATE TABLE posts ("
+        "  id INTEGER PRIMARY KEY,"
+        "  user_id INTEGER,"
+        "  FOREIGN KEY (user_id) REFERENCES users(id)"
+        ");");
+
+    const auto& t = s.tables.at("posts");
+    REQUIRE(t.foreign_keys.size() == 1);
+    CHECK(t.foreign_keys[0].constraint_name.empty());
+}
+
+TEST_CASE("parse named composite FOREIGN KEY constraint") {
+    Schema s = parse(
+        "CREATE TABLE parent (a INTEGER, b INTEGER, PRIMARY KEY (a, b));"
+        "CREATE TABLE child ("
+        "  id INTEGER PRIMARY KEY,"
+        "  pa INTEGER,"
+        "  pb INTEGER,"
+        "  CONSTRAINT fk_child_parent FOREIGN KEY (pa, pb) REFERENCES parent(a, b)"
+        ");");
+
+    const auto& t = s.tables.at("child");
+    REQUIRE(t.foreign_keys.size() == 1);
+    CHECK(t.foreign_keys[0].constraint_name == "fk_child_parent");
+    CHECK(t.foreign_keys[0].from_columns == (std::vector<std::string>{"pa", "pb"}));
+}

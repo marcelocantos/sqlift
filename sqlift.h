@@ -152,13 +152,19 @@ struct CheckConstraint {
 };
 
 struct ForeignKey {
+    std::string constraint_name;             // empty if unnamed
     std::vector<std::string> from_columns;
     std::string to_table;
     std::vector<std::string> to_columns;
     std::string on_update = "NO ACTION";
     std::string on_delete = "NO ACTION";
 
-    bool operator==(const ForeignKey&) const = default;
+    // Structural equality — excludes constraint_name (cosmetic).
+    bool operator==(const ForeignKey& o) const {
+        return from_columns == o.from_columns && to_table == o.to_table &&
+               to_columns == o.to_columns && on_update == o.on_update &&
+               on_delete == o.on_delete;
+    }
 };
 
 struct Table {
@@ -166,6 +172,7 @@ struct Table {
     std::vector<Column> columns;           // Ordered by cid.
     std::vector<ForeignKey> foreign_keys;
     std::vector<CheckConstraint> check_constraints;
+    std::string pk_constraint_name;        // empty if unnamed (cosmetic, excluded from ==).
     bool without_rowid = false;
     bool strict = false;
     std::string raw_sql;                   // Original CREATE TABLE from sqlite_master.
@@ -297,6 +304,9 @@ struct ApplyOptions {
 
 // Apply a migration plan to a live database.
 void apply(sqlite3* db, const MigrationPlan& plan, const ApplyOptions& opts = {});
+
+// Return the migration version counter (0 if no migrations have run).
+int64_t migration_version(sqlite3* db);
 
 
 // --- json.h ---
