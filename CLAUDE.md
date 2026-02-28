@@ -51,6 +51,10 @@ docs/guide.md     # Concepts and workflows
 docs/reference.md # Complete API reference
 ```
 
+## TODOs
+
+Tracked in `docs/TODO.md`.
+
 ## Testing
 
 All tests run in-memory (`:memory:` databases), no filesystem artifacts. Test files:
