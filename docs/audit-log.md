@@ -1,0 +1,46 @@
+# Audit Log
+
+Chronological record of audits, releases, documentation passes, and other
+maintenance activities. Append-only — newest entries at the bottom.
+
+## 2026-02-22 — open-sourcing (reconstructed)
+
+- **Commit**: `740eb58`
+- **Outcome**: Initial open-source release of sqlift — declarative SQLite schema migration library. Added LICENSE (Apache 2.0), CLAUDE.md, and agents-guide.md for agentic coding tools. Also added JSON serialization for MigrationPlan.
+
+## 2026-02-22 — release/v0.1.0 (reconstructed)
+
+- **Commit**: `740eb58`
+- **Outcome**: Tagged v0.1.0 at initial release commit.
+
+## 2026-02-22 — release/v0.2.0 (reconstructed)
+
+- **Commit**: `f84f17a`
+- **Outcome**: Tagged v0.2.0 after adding JSON serialization for MigrationPlan.
+
+## 2026-02-23 — release/v0.3.0 (reconstructed)
+
+- **Commit**: `43bcba9`
+- **Outcome**: Tagged v0.3.0 after replacing Makefile with mkfile and vendoring doctest.
+
+## 2026-02-23 — release/v0.4.0 (reconstructed)
+
+- **Commit**: `f88e1d3`
+- **Outcome**: Tagged v0.4.0 after adding breaking change detection, richer FK errors, and int64 bindings.
+
+## 2026-02-25 — /audit (reconstructed)
+
+- **Commit**: `5dbda8f`
+- **Outcome**: Comprehensive pre-v0.6.0 audit. 1 Critical, 2 High, 3 Medium, 2 Low, 17 Info findings. All 8 actionable items resolved in follow-up commits same day: added NOTICES for third-party attribution, updated docs/reference.md and docs/guide.md, switched Column::generated to GeneratedType enum, moved sha256() to file-local scope, updated README dependency note, updated nlohmann/json from v3.11.3 to v3.12.0, and added .gitignore entries.
+- **Deferred**:
+  - extract() and parse_create_table_body() noted as longest functions (~140-160 lines), worth watching for future maintainability
+
+## 2026-02-25 — documentation-pass (reconstructed)
+
+- **Commit**: `ca750a6`
+- **Outcome**: Applied audit findings to docs: updated reference.md and guide.md, hid sha256, fixed GeneratedType enum documentation.
+
+## 2026-02-25 — release/v0.6.0 (reconstructed)
+
+- **Commit**: `8ebfb2f`
+- **Outcome**: Tagged v0.6.0 (note: v0.5.0 not found in tags — likely skipped). Bumped version macros after audit fixes and nlohmann/json dependency update landed.

@@ -92,7 +92,24 @@ Execute a migration plan against a live database.
 - `ApplyError` if any SQL statement fails during execution (e.g. a foreign key
   check violation during a table rebuild).
 
-After successful execution, updates the schema hash in `_sqlift_state`.
+After successful execution, updates the schema hash and increments the
+migration version counter in `_sqlift_state`.
+
+---
+
+### `migration_version`
+
+```cpp
+int64_t migration_version(sqlite3* db);
+```
+
+Return the migration version counter. Starts at 0 (no migrations have run) and
+increments by 1 each time `apply()` executes a non-empty plan.
+
+**Parameters:**
+- `db` -- an open SQLite database handle.
+
+**Returns:** the current migration version (0 if no migrations have been applied).
 
 ---
 
@@ -128,6 +145,7 @@ struct Table {
     std::vector<Column> columns;                    // Ordered by column ID.
     std::vector<ForeignKey> foreign_keys;
     std::vector<CheckConstraint> check_constraints;
+    std::string pk_constraint_name;                 // Empty if unnamed.
     bool without_rowid = false;
     bool strict = false;
     std::string raw_sql;                            // Original CREATE TABLE from sqlite_master.
@@ -136,8 +154,8 @@ struct Table {
 
 Equality comparison is structural -- it compares `name`, `columns`,
 `foreign_keys`, `check_constraints`, `without_rowid`, and `strict`. The
-`raw_sql` field is excluded from equality because SQLite does not update it
-after `ALTER TABLE ADD COLUMN`.
+`raw_sql` and `pk_constraint_name` fields are excluded from equality (cosmetic
+only) but included in `Schema::hash()`.
 
 `raw_sql` is used during table rebuilds to reconstruct the desired table
 structure.
@@ -190,6 +208,7 @@ struct CheckConstraint {
 
 ```cpp
 struct ForeignKey {
+    std::string constraint_name;                    // Empty if unnamed.
     std::vector<std::string> from_columns;
     std::string to_table;
     std::vector<std::string> to_columns;
@@ -199,7 +218,8 @@ struct ForeignKey {
 ```
 
 Supports composite foreign keys. `on_update` and `on_delete` are stored
-uppercase (e.g. `"CASCADE"`, `"SET NULL"`, `"NO ACTION"`).
+uppercase (e.g. `"CASCADE"`, `"SET NULL"`, `"NO ACTION"`). `constraint_name`
+is excluded from equality (cosmetic only) but included in `Schema::hash()`.
 
 ---
 
