@@ -57,7 +57,7 @@ reference.
 
 ### Requirements
 
-- C++23 compiler
+- C++23 compiler (GCC 13+, Clang 16+, Apple Clang 15+)
 - SQLite3 (headers and library)
 - [doctest](https://github.com/doctest/doctest) (for running tests only; vendored)
 - [mk](https://github.com/marcelocantos/mk) build tool (for building from source)
@@ -66,6 +66,7 @@ reference.
 
 - **[Guide](docs/guide.md)** -- walkthrough of core concepts and common workflows
 - **[Reference](docs/reference.md)** -- complete API reference
+- **[Changelog](https://github.com/marcelocantos/sqlift/releases)** -- release history with notes
 
 ## Building and testing
 

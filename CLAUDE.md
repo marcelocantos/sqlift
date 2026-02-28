@@ -46,7 +46,7 @@ Plus one action:
 sqlift.h          # All declarations
 sqlift.cpp        # All implementations (~1624 lines)
 mkfile            # mk build file
-tests/            # doctest suites (7 files, 91 tests)
+tests/            # doctest suites (7 files, 108 tests)
 docs/guide.md     # Concepts and workflows
 docs/reference.md # Complete API reference
 ```

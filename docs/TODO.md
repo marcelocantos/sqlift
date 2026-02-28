@@ -2,7 +2,8 @@
 
 ## Audit follow-ups
 
-- [ ] Address remaining Low + Info findings from [audit-2026-02-28.md](audit-2026-02-28.md) (10 Low, 3 Info)
+- [x] Address remaining Low findings from [audit-2026-02-28.md](audit-2026-02-28.md) (10 Low)
+- [ ] Address remaining Info findings from [audit-2026-02-28.md](audit-2026-02-28.md) (3 Info)
 
 ## Features
 
