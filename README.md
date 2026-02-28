@@ -43,17 +43,17 @@ sqlift::apply(db, plan);
 - **Inspectable plans** -- review every SQL statement before execution
 - **Destructive operation guard** -- dropping tables or columns requires explicit opt-in
 - **Drift detection** -- detects out-of-band schema changes
-- **Two files** -- the entire library is `sqlift.h` + `sqlift.cpp`
+- **Two files** -- the entire library is `dist/sqlift.h` + `dist/sqlift.cpp`
 - **No external dependencies** beyond SQLite3 (nlohmann/json is vendored)
 
 ## Installation
 
-Copy `sqlift.h` and `sqlift.cpp` into your project. Compile `sqlift.cpp`
-alongside your other sources and link against SQLite3. That's it.
+Copy `dist/sqlift.h` and `dist/sqlift.cpp` into your project. Compile
+`sqlift.cpp` alongside your other sources and link against SQLite3. That's it.
 
 If you use an agentic coding tool (Claude Code, Cursor, Copilot, etc.), include
-[`agents-guide.md`](agents-guide.md) in your project context for a condensed API
-reference.
+[`dist/agents-guide.md`](dist/agents-guide.md) in your project context for a
+condensed API reference.
 
 ### Requirements
 

@@ -1,6 +1,6 @@
 # sqlift -- Agent Guide
 
-Declarative SQLite schema migration. Two files: `sqlift.h` + `sqlift.cpp`.
+Declarative SQLite schema migration. Two files: `dist/sqlift.h` + `dist/sqlift.cpp`.
 Requires C++23 and SQLite3. No other dependencies.
 
 ```cpp

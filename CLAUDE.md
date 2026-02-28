@@ -1,6 +1,6 @@
 # sqlift
 
-Declarative SQLite schema migration library. Two canonical source files: `sqlift.h` (header) and `sqlift.cpp` (implementation).
+Declarative SQLite schema migration library. Two canonical source files: `dist/sqlift.h` (header) and `dist/sqlift.cpp` (implementation).
 
 ## Build
 
@@ -43,8 +43,10 @@ Plus one action:
 ## File layout
 
 ```
-sqlift.h          # All declarations
-sqlift.cpp        # All implementations (~1624 lines)
+dist/
+  sqlift.h        # All declarations
+  sqlift.cpp      # All implementations (~1624 lines)
+  agents-guide.md # Quick-start guide for AI coding agents
 mkfile            # mk build file
 tests/            # doctest suites (7 files, 108 tests)
 docs/guide.md     # Concepts and workflows

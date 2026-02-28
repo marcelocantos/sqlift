@@ -2,7 +2,7 @@ include std/cxx.mk
 
 cxx ?= c++
 cxxflags = -std=c++23 -Wall -Wextra -Wpedantic -O2
-cppflags = -I. -Ivendor/include
+cppflags = -Idist -Ivendor/include
 ldlibs = -lsqlite3
 prefix ?= /usr/local
 
@@ -19,10 +19,10 @@ san_bin = build/sanitize/test_sqlift
 $lib: build/sqlift.o
     ar rcs $target $inputs
 
-build/sqlift.o: sqlift.cpp sqlift.h
+build/sqlift.o: dist/sqlift.cpp dist/sqlift.h
     $cxx $cxxflags $cppflags -c $input -o $target
 
-build/test/{name}.o: tests/{name}.cpp sqlift.h
+build/test/{name}.o: tests/{name}.cpp dist/sqlift.h
     $cxx $cxxflags $cppflags -c $input -o $target
 
 !lib: $lib
@@ -33,10 +33,10 @@ build/test/{name}.o: tests/{name}.cpp sqlift.h
 $test_bin: $test_obj $lib
     $cxx $cxxflags $inputs $ldlibs -o $target
 
-build/sanitize/sqlift.o: sqlift.cpp sqlift.h
+build/sanitize/sqlift.o: dist/sqlift.cpp dist/sqlift.h
     $cxx $san_cxxflags $cppflags -c $input -o $target
 
-build/sanitize/test/{name}.o: tests/{name}.cpp sqlift.h
+build/sanitize/test/{name}.o: tests/{name}.cpp dist/sqlift.h
     $cxx $san_cxxflags $cppflags -c $input -o $target
 
 build/sanitize/libsqlift.a: build/sanitize/sqlift.o
@@ -50,7 +50,7 @@ $san_bin: $san_obj build/sanitize/libsqlift.a
 
 !install: $lib
     mkdir -p $prefix/include $prefix/lib
-    cp sqlift.h $prefix/include/
+    cp dist/sqlift.h $prefix/include/
     cp $lib $prefix/lib/
 
 !uninstall:
