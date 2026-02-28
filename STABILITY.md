@@ -53,15 +53,17 @@ struct Table {
     std::vector<Column> columns;
     std::vector<ForeignKey> foreign_keys;
     std::vector<CheckConstraint> check_constraints;
+    std::string pk_constraint_name;        // Cosmetic; excluded from == and hash().
     bool without_rowid = false;
     bool strict = false;
     std::string raw_sql;
-    bool operator==(const Table& o) const;  // excludes raw_sql
+    bool operator==(const Table& o) const;  // excludes raw_sql, pk_constraint_name
 };
 ```
 
-**Stable.** Fields have only grown additively (check_constraints and strict
-added in v0.6.0). Equality excludes raw_sql by design.
+**Stable.** Fields have only grown additively (check_constraints, strict, and
+pk_constraint_name added in v0.6.0). Equality excludes raw_sql and
+pk_constraint_name by design (both are cosmetic).
 
 ```cpp
 enum class GeneratedType { Normal = 0, Virtual = 2, Stored = 3 };
@@ -94,16 +96,18 @@ struct CheckConstraint {
 
 ```cpp
 struct ForeignKey {
+    std::string constraint_name;             // Cosmetic; excluded from == and hash().
     std::vector<std::string> from_columns;
     std::string to_table;
     std::vector<std::string> to_columns;
     std::string on_update = "NO ACTION";
     std::string on_delete = "NO ACTION";
-    bool operator==(const ForeignKey&) const = default;
+    bool operator==(const ForeignKey& o) const;  // excludes constraint_name
 };
 ```
 
-**Stable.**
+**Stable.** constraint_name added in v0.6.0. Equality excludes constraint_name
+(cosmetic only).
 
 ```cpp
 struct Index {
