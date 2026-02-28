@@ -48,6 +48,7 @@ if (!plan.empty())
 | `from_json` | `MigrationPlan from_json(const string& json_str)` | Deserialize plan from JSON. Throws `JsonError`. |
 | `to_string` | `string to_string(OpType type)` | OpType to PascalCase string (e.g. `"CreateTable"`). |
 | `op_type_from_string` | `OpType op_type_from_string(const string& s)` | Parse string to OpType. Throws `JsonError`. |
+| `migration_version` | `int64_t migration_version(sqlite3* db)` | Migration version counter (0 if no migrations have run, increments by 1 on each non-empty apply). |
 
 ### Schema types
 
@@ -71,6 +72,7 @@ struct CheckConstraint {
 };
 
 struct ForeignKey {
+    string constraint_name;  // empty if unnamed
     vector<string> from_columns;
     string to_table;
     vector<string> to_columns;
@@ -83,6 +85,7 @@ struct Table {
     vector<Column> columns;                    // Ordered by column ID.
     vector<ForeignKey> foreign_keys;
     vector<CheckConstraint> check_constraints;
+    string pk_constraint_name;  // empty if unnamed
     bool without_rowid = false;
     bool strict = false;
     string raw_sql;                            // Excluded from operator==.

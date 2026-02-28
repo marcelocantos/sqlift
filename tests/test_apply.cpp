@@ -159,6 +159,73 @@ TEST_CASE("apply error recovery preserves database state") {
         "SELECT count(*) FROM sqlite_master WHERE name LIKE '%sqlift_new%'");
     REQUIRE(temp_check.step());
     CHECK(temp_check.column_int(0) == 0);
+
+    // Verify FK enforcement is restored to ON after failed apply (T1)
+    Statement fk_check(db, "PRAGMA foreign_keys");
+    REQUIRE(fk_check.step());
+    CHECK(fk_check.column_int(0) == 1);
+}
+
+TEST_CASE("apply restores FK enforcement ON after successful rebuild") {
+    Database db(":memory:");
+    db.exec("PRAGMA foreign_keys=ON;");
+    db.exec(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);"
+        "INSERT INTO users VALUES (1, 'Alice');");
+
+    Schema desired = parse(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name INTEGER);");
+    Schema current = extract(db);
+    auto plan = diff(current, desired);
+
+    apply(db, plan);
+
+    Statement fk_check(db, "PRAGMA foreign_keys");
+    REQUIRE(fk_check.step());
+    CHECK(fk_check.column_int(0) == 1);
+}
+
+TEST_CASE("schema hash is deterministic") {
+    Schema s1 = parse("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);");
+    Schema s2 = parse("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);");
+    CHECK(s1.hash() == s2.hash());
+}
+
+TEST_CASE("schema hash differs for different schemas") {
+    Schema s1 = parse("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);");
+    Schema s2 = parse("CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT);");
+    CHECK(s1.hash() != s2.hash());
+}
+
+TEST_CASE("apply rebuilds multiple tables") {
+    Database db(":memory:");
+    db.exec(
+        "CREATE TABLE a (id INTEGER PRIMARY KEY, x TEXT);"
+        "CREATE TABLE b (id INTEGER PRIMARY KEY, y TEXT);"
+        "INSERT INTO a VALUES (1, 'aa');"
+        "INSERT INTO b VALUES (1, 'bb');");
+
+    Schema desired = parse(
+        "CREATE TABLE a (id INTEGER PRIMARY KEY, x INTEGER);"
+        "CREATE TABLE b (id INTEGER PRIMARY KEY, y INTEGER);");
+    Schema current = extract(db);
+    auto plan = diff(current, desired);
+
+    apply(db, plan);
+
+    // Verify both tables rebuilt with data preserved
+    Statement sa(db, "SELECT x FROM a WHERE id = 1");
+    REQUIRE(sa.step());
+    CHECK(sa.column_text(0) == "aa");
+
+    Statement sb(db, "SELECT y FROM b WHERE id = 1");
+    REQUIRE(sb.step());
+    CHECK(sb.column_text(0) == "bb");
+
+    // Verify FK enforcement still ON after rebuild
+    Statement fk(db, "PRAGMA foreign_keys");
+    REQUIRE(fk.step());
+    CHECK(fk.column_int(0) == 1);
 }
 
 TEST_CASE("migration_version starts at 0") {

@@ -252,11 +252,5 @@ third-party attribution is in place (THIRD_PARTY_LICENSES.md).
 - **Data migration.** sqlift is schema-only; data transforms are the caller's
   responsibility.
 - **Cross-database support.** SQLite-only by design.
-- **Named table-level constraint preservation.** `CONSTRAINT pk_foo PRIMARY
-  KEY(a, b)` names are lost during extraction.
 - **Redundant index detection.** Warning when desired schema has prefix-
   duplicate or PK-duplicate indexes.
-- **Schema version counter in `_sqlift_state`.** Monotonic counter alongside
-  the hash.
-- **`mk install` target.**
-- **`mk sanitize` target** (ASan/UBSan build variant).

@@ -229,11 +229,8 @@ std::string Schema::hash() const {
                 oss << " EXPR=" << col.generated_expr;
             oss << '\n';
         }
-        if (!table.pk_constraint_name.empty())
-            oss << "  PK_NAME=" << table.pk_constraint_name << '\n';
         for (const auto& fk : table.foreign_keys) {
             oss << "  FK";
-            if (!fk.constraint_name.empty()) oss << " NAME=" << fk.constraint_name;
             for (const auto& c : fk.from_columns) oss << ' ' << c;
             oss << " -> " << fk.to_table << '(';
             for (size_t i = 0; i < fk.to_columns.size(); ++i) {
@@ -336,7 +333,18 @@ ParsedTableBody parse_create_table_body(const std::string& raw_sql) {
     size_t body_start = std::string::npos;
     size_t body_end = std::string::npos;
     for (size_t i = 0; i < raw_sql.size(); ++i) {
-        if (raw_sql[i] == '(') {
+        if (raw_sql[i] == '\'') {
+            ++i; // skip opening quote
+            while (i < raw_sql.size()) {
+                if (raw_sql[i] == '\'' && i + 1 < raw_sql.size() && raw_sql[i + 1] == '\'')
+                    i += 2; // skip escaped quote
+                else if (raw_sql[i] == '\'')
+                    break;
+                else
+                    ++i;
+            }
+            continue; // i now points at closing quote; loop ++i advances past it
+        } else if (raw_sql[i] == '(') {
             if (depth == 0) body_start = i + 1;
             ++depth;
         } else if (raw_sql[i] == ')') {
@@ -355,7 +363,18 @@ ParsedTableBody parse_create_table_body(const std::string& raw_sql) {
     depth = 0;
     size_t seg_start = body_start;
     for (size_t i = body_start; i < body_end; ++i) {
-        if (raw_sql[i] == '(') ++depth;
+        if (raw_sql[i] == '\'') {
+            ++i; // skip opening quote
+            while (i < body_end) {
+                if (raw_sql[i] == '\'' && i + 1 < body_end && raw_sql[i + 1] == '\'')
+                    i += 2; // skip escaped quote
+                else if (raw_sql[i] == '\'')
+                    break;
+                else
+                    ++i;
+            }
+            continue; // i now points at closing quote; loop ++i advances past it
+        } else if (raw_sql[i] == '(') ++depth;
         else if (raw_sql[i] == ')') --depth;
         else if (raw_sql[i] == ',' && depth == 0) {
             defs.push_back(trim(raw_sql.substr(seg_start, i - seg_start)));
@@ -576,7 +595,10 @@ Schema extract(sqlite3* db) {
                 col.notnull = col_stmt.column_int(3) != 0;
                 col.default_value = col_stmt.column_text(4);
                 col.pk = static_cast<int>(col_stmt.column_int(5));
-                col.generated = static_cast<GeneratedType>(col_stmt.column_int(6));
+                auto hidden = col_stmt.column_int(6);
+                if (hidden != 0 && hidden != 2 && hidden != 3)
+                    throw ExtractError("Unsupported generated column type: " + std::to_string(hidden));
+                col.generated = static_cast<GeneratedType>(hidden);
                 table.columns.push_back(std::move(col));
             }
 
@@ -1430,28 +1452,53 @@ void apply(sqlite3* db, const MigrationPlan& plan, const ApplyOptions& opts) {
         }
     }
 
-    for (const auto& op : plan.operations()) {
-        for (const auto& sql : op.sql) {
-            // PRAGMA foreign_key_check returns rows if there are violations.
-            // We need to handle this specially.
-            if (sql.find("PRAGMA foreign_key_check") == 0) {
-                Statement stmt(db, sql);
-                if (stmt.step()) {
-                    std::string table = stmt.column_text(0);
-                    int64_t rowid = stmt.column_int(1);
-                    std::string parent = stmt.column_text(2);
-                    throw ApplyError(
-                        "Foreign key violation in table '" + table +
-                        "' (rowid " + std::to_string(rowid) +
-                        "): references missing row in parent table '" +
-                        parent + "'");
-                }
-                continue;
-            }
+    // Save current FK enforcement state so we can restore it on failure.
+    bool fk_was_on = false;
+    {
+        Statement fk_query(db, "PRAGMA foreign_keys");
+        fk_was_on = fk_query.step() && fk_query.column_int(0) != 0;
+    }
 
-            Statement stmt(db, sql);
-            stmt.step();
+    try {
+        for (const auto& op : plan.operations()) {
+            for (const auto& sql : op.sql) {
+                // PRAGMA foreign_key_check returns rows if there are violations.
+                // We need to handle this specially.
+                if (sql.find("PRAGMA foreign_key_check") == 0) {
+                    Statement stmt(db, sql);
+                    if (stmt.step()) {
+                        std::string table = stmt.column_text(0);
+                        int64_t rowid = stmt.column_int(1);
+                        std::string parent = stmt.column_text(2);
+                        throw ApplyError(
+                            "Foreign key violation in table '" + table +
+                            "' (rowid " + std::to_string(rowid) +
+                            "): references missing row in parent table '" +
+                            parent + "'");
+                    }
+                    continue;
+                }
+
+                Statement stmt(db, sql);
+                stmt.step();
+            }
         }
+    } catch (...) {
+        // Roll back any open savepoint from a failed rebuild, then restore FK state.
+        // PRAGMA foreign_keys cannot be changed inside an open transaction/savepoint.
+        try {
+            Statement rb(db, "ROLLBACK TO SAVEPOINT sqlift_rebuild");
+            rb.step();
+            Statement rel(db, "RELEASE SAVEPOINT sqlift_rebuild");
+            rel.step();
+        } catch (...) {}
+        // Restore FK enforcement to its state before apply() was called.
+        try {
+            Statement restore(db, fk_was_on ? "PRAGMA foreign_keys=ON"
+                                            : "PRAGMA foreign_keys=OFF");
+            restore.step();
+        } catch (...) {}
+        throw;
     }
 
     // Update stored hash
