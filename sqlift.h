@@ -10,13 +10,8 @@
 #define SQLIFT_VERSION_MINOR 7
 #define SQLIFT_VERSION_PATCH 0
 
-#include <algorithm>
-#include <array>
 #include <cstdint>
-#include <iomanip>
 #include <map>
-#include <set>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>

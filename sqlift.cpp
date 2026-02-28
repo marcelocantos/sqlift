@@ -486,13 +486,7 @@ ParsedTableBody parse_create_table_body(const std::string& raw_sql) {
                 col_name = def.substr(0, first_space);
             else
                 col_name = def;
-            // Strip quotes from column name
-            if (col_name.size() >= 2 &&
-                ((col_name.front() == '"' && col_name.back() == '"') ||
-                 (col_name.front() == '[' && col_name.back() == ']') ||
-                 (col_name.front() == '`' && col_name.back() == '`'))) {
-                col_name = col_name.substr(1, col_name.size() - 2);
-            }
+            col_name = strip_quotes(col_name);
 
             // Find the expression in parens after GENERATED ALWAYS AS
             auto paren = def.find('(', gen_pos);
