@@ -44,3 +44,12 @@ maintenance activities. Append-only — newest entries at the bottom.
 
 - **Commit**: `8ebfb2f`
 - **Outcome**: Tagged v0.6.0 (note: v0.5.0 not found in tags — likely skipped). Bumped version macros after audit fixes and nlohmann/json dependency update landed.
+
+## 2026-02-28 — /open-source v0.7.0
+
+- **Commit**: `426d160`
+- **Outcome**: Full open-source readiness pass. Phase 1 (Audit): 22 findings (2H, 7M, 11L, 3I) — report at `docs/audit-2026-02-28.md`. Phase 2 (Fixes): all High and Medium findings resolved — FK enforcement restoration on error, parser string-literal awareness, GeneratedType validation, hash consistency, vendor LICENSEs. Phase 3 (Docs): updated STABILITY.md with `pk_constraint_name` and `constraint_name` fields; all other docs already current. Phase 4 (Publish): pushed to origin, disabled unused wiki. Phase 5 (Release): added CI workflow (`.github/workflows/ci.yml` — tests + sanitizer on ubuntu + macOS), bumped to v0.7.0, created GitHub release. CI green on first run.
+- **Deferred**:
+  - 11 Low + 3 Info audit findings (see `docs/audit-2026-02-28.md`)
+  - Redundant index detection (TODO)
+  - 1.0 settling threshold: 0/3 consecutive minor releases without breaking changes
