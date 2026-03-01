@@ -117,7 +117,8 @@ following are detected as breaking:
 
 **Returns:** a `MigrationPlan` containing the ordered operations needed to
 transform `current` into `desired`. Returns an empty plan if the schemas are
-structurally identical.
+structurally identical. Any redundant indexes in the desired schema are
+reported via `plan.Warnings()`.
 
 **Errors:** `*BreakingChangeError` if any breaking change is detected.
 
@@ -131,7 +132,29 @@ if err != nil {
     log.Fatal(err)
 }
 fmt.Printf("%d operation(s)\n", len(plan.Operations()))
+for _, w := range plan.Warnings() {
+    log.Println("warning:", w.Message)
+}
 ```
+
+---
+
+### `DetectRedundantIndexes`
+
+```go
+func DetectRedundantIndexes(schema Schema) []Warning
+```
+
+Analyse a schema for redundant indexes. Detects two kinds:
+
+- **Prefix-duplicate:** a non-unique index whose columns are a prefix of
+  another index on the same table (with the same `WHERE` clause).
+- **PK-duplicate:** an index whose columns are a prefix of the table's
+  `PRIMARY KEY` columns (non-unique), or an exact match (even if unique, since
+  the PK already implies uniqueness).
+
+`Diff` calls this on the desired schema automatically, but it is also
+available as a standalone function for direct schema analysis.
 
 ---
 
@@ -415,6 +438,7 @@ func (tr Trigger) Equal(o Trigger) bool
 type MigrationPlan struct { /* unexported */ }
 
 func (p MigrationPlan) Operations() []Operation
+func (p MigrationPlan) Warnings() []Warning
 func (p MigrationPlan) HasDestructiveOperations() bool
 func (p MigrationPlan) Empty() bool
 ```
@@ -423,6 +447,7 @@ An ordered sequence of operations produced by `Diff`. The plan is immutable
 once created; the internal slice is not exposed directly.
 
 - `Operations()` -- returns the full list of operations in execution order.
+- `Warnings()` -- returns any schema warnings (e.g. redundant indexes).
 - `HasDestructiveOperations()` -- reports whether any operation has
   `Destructive == true`.
 - `Empty()` -- reports whether the plan contains no operations (the schemas
@@ -453,6 +478,34 @@ A single migration step.
   recreate indexes/triggers, FK check, release, re-enable FKs).
 - `Destructive` -- `true` if this operation drops data (dropped tables,
   dropped indexes, table rebuilds that remove columns).
+
+---
+
+### `WarningType`
+
+```go
+type WarningType int
+
+const (
+    RedundantIndex WarningType = iota
+)
+```
+
+---
+
+### `Warning`
+
+```go
+type Warning struct {
+    Type      WarningType
+    Message   string // Human-readable description.
+    IndexName string // The redundant index.
+    CoveredBy string // The covering index name, or "PRIMARY KEY".
+    TableName string // The table both indexes belong to.
+}
+```
+
+A non-fatal issue detected in the desired schema.
 
 ---
 

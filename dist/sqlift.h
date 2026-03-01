@@ -251,6 +251,18 @@ Schema extract(sqlite3* db);
 
 
 
+enum class WarningType {
+    RedundantIndex,
+};
+
+struct Warning {
+    WarningType type;
+    std::string message;        // Human-readable description.
+    std::string index_name;     // The redundant index.
+    std::string covered_by;     // The covering index name, or "PRIMARY KEY".
+    std::string table_name;
+};
+
 enum class OpType {
     CreateTable,
     DropTable,
@@ -275,6 +287,7 @@ struct Operation {
 class MigrationPlan {
 public:
     const std::vector<Operation>& operations() const { return ops_; }
+    const std::vector<Warning>& warnings() const { return warnings_; }
     bool has_destructive_operations() const;
     bool empty() const { return ops_.empty(); }
 
@@ -282,10 +295,14 @@ private:
     friend MigrationPlan diff(const Schema& current, const Schema& desired);
     friend MigrationPlan from_json(const std::string& json_str);
     std::vector<Operation> ops_;
+    std::vector<Warning> warnings_;
 };
 
 // Pure function: compare two schemas and produce a migration plan.
 MigrationPlan diff(const Schema& current, const Schema& desired);
+
+// Detect redundant indexes in a schema (prefix-duplicate and PK-duplicate).
+std::vector<Warning> detect_redundant_indexes(const Schema& schema);
 
 
 // --- apply.h ---

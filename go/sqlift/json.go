@@ -75,10 +75,20 @@ type jsonOperation struct {
 	Destructive bool     `json:"destructive"`
 }
 
+// jsonWarning is the wire representation of a [Warning].
+type jsonWarning struct {
+	Type      string `json:"type"`
+	Message   string `json:"message"`
+	IndexName string `json:"index_name"`
+	CoveredBy string `json:"covered_by"`
+	TableName string `json:"table_name"`
+}
+
 // jsonPlan is the wire representation of a [MigrationPlan].
 type jsonPlan struct {
 	Version    int             `json:"version"`
 	Operations []jsonOperation `json:"operations"`
+	Warnings   []jsonWarning   `json:"warnings,omitempty"`
 }
 
 // ToJSON serialises plan to indented JSON (version 1 format).
@@ -100,6 +110,15 @@ func ToJSON(plan MigrationPlan) ([]byte, error) {
 			Description: op.Description,
 			SQL:         sql,
 			Destructive: op.Destructive,
+		})
+	}
+	for _, w := range plan.Warnings() {
+		jp.Warnings = append(jp.Warnings, jsonWarning{
+			Type:      "RedundantIndex",
+			Message:   w.Message,
+			IndexName: w.IndexName,
+			CoveredBy: w.CoveredBy,
+			TableName: w.TableName,
 		})
 	}
 	return json.MarshalIndent(jp, "", "  ")
@@ -237,7 +256,27 @@ func FromJSON(data []byte) (MigrationPlan, error) {
 		})
 	}
 
-	return MigrationPlan{operations: ops}, nil
+	// Parse warnings (optional for backward compatibility).
+	var warns []Warning
+	if warnsRaw, ok := raw["warnings"]; ok {
+		var rawWarns []json.RawMessage
+		if err := json.Unmarshal(warnsRaw, &rawWarns); err == nil {
+			for _, rw := range rawWarns {
+				var jw jsonWarning
+				if err := json.Unmarshal(rw, &jw); err == nil {
+					warns = append(warns, Warning{
+						Type:      RedundantIndex,
+						Message:   jw.Message,
+						IndexName: jw.IndexName,
+						CoveredBy: jw.CoveredBy,
+						TableName: jw.TableName,
+					})
+				}
+			}
+		}
+	}
+
+	return MigrationPlan{operations: ops, warnings: warns}, nil
 }
 
 // sqlPrefixForOpType returns the expected SQL prefix for the first statement of

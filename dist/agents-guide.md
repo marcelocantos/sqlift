@@ -45,7 +45,8 @@ if (!plan.empty())
 |----------|-----------|------|
 | `parse` | `Schema parse(const string& sql)` | Parse DDL into Schema. Throws `ParseError`. |
 | `extract` | `Schema extract(sqlite3* db)` | Read schema from live DB via sqlite_master + PRAGMAs. |
-| `diff` | `MigrationPlan diff(const Schema& current, const Schema& desired)` | Pure diff. Returns empty plan if identical. |
+| `diff` | `MigrationPlan diff(const Schema& current, const Schema& desired)` | Pure diff. Returns empty plan if identical. Populates warnings for redundant indexes. |
+| `detect_redundant_indexes` | `vector<Warning> detect_redundant_indexes(const Schema& schema)` | Detect prefix-duplicate and PK-duplicate indexes. |
 | `apply` | `void apply(sqlite3* db, const MigrationPlan& plan, const ApplyOptions& opts = {})` | Execute plan. Throws `DestructiveError`, `DriftError`, `ApplyError`. |
 | `to_json` | `string to_json(const MigrationPlan& plan)` | Serialize plan to JSON string. |
 | `from_json` | `MigrationPlan from_json(const string& json_str)` | Deserialize plan from JSON. Throws `JsonError`. |
@@ -118,6 +119,16 @@ struct Schema {
 #### Migration types
 
 ```cpp
+enum class WarningType { RedundantIndex };
+
+struct Warning {
+    WarningType type;
+    string message;        // Human-readable description.
+    string index_name;     // The redundant index.
+    string covered_by;     // Covering index name or "PRIMARY KEY".
+    string table_name;
+};
+
 enum class OpType {
     CreateTable, DropTable, RebuildTable, AddColumn,
     CreateIndex, DropIndex,
@@ -135,6 +146,7 @@ struct Operation {
 
 class MigrationPlan {
     const vector<Operation>& operations() const;
+    const vector<Warning>& warnings() const;
     bool has_destructive_operations() const;
     bool empty() const;
 };
@@ -259,7 +271,8 @@ if !plan.Empty() {
 |----------|-----------|------|
 | `Parse` | `func Parse(ddl string) (Schema, error)` | Parse DDL into Schema. Returns `*ParseError`. |
 | `Extract` | `func Extract(ctx context.Context, db *sql.DB) (Schema, error)` | Read schema from live DB. |
-| `Diff` | `func Diff(current, desired Schema) (MigrationPlan, error)` | Pure diff. Returns `*BreakingChangeError` on unsafe changes. |
+| `Diff` | `func Diff(current, desired Schema) (MigrationPlan, error)` | Pure diff. Returns `*BreakingChangeError` on unsafe changes. Populates warnings for redundant indexes. |
+| `DetectRedundantIndexes` | `func DetectRedundantIndexes(schema Schema) []Warning` | Detect prefix-duplicate and PK-duplicate indexes. |
 | `Apply` | `func Apply(ctx context.Context, db *sql.DB, plan MigrationPlan, opts ApplyOptions) error` | Execute plan. Returns `*DestructiveError`, `*DriftError`, `*ApplyError`. |
 | `ToJSON` | `func ToJSON(plan MigrationPlan) ([]byte, error)` | Serialize plan to JSON bytes. |
 | `FromJSON` | `func FromJSON(data []byte) (MigrationPlan, error)` | Deserialize plan from JSON. Returns `*JSONError`. |

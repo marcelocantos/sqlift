@@ -365,6 +365,45 @@ func TestJSON(t *testing.T) {
 		}
 	})
 
+	t.Run("json round-trip: warnings preserved", func(t *testing.T) {
+		s := mustParse(t,
+			"CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);"+
+				"CREATE INDEX idx_id ON users(id);")
+		plan := mustDiff(t, Schema{}, s)
+		if len(plan.Warnings()) != 1 {
+			t.Fatalf("expected 1 warning, got %d", len(plan.Warnings()))
+		}
+
+		data, err := ToJSON(plan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		restored, err := FromJSON(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(restored.Warnings()) != 1 {
+			t.Fatalf("expected 1 warning after round-trip, got %d", len(restored.Warnings()))
+		}
+		if restored.Warnings()[0].IndexName != "idx_id" {
+			t.Errorf("expected IndexName 'idx_id', got %q", restored.Warnings()[0].IndexName)
+		}
+		if restored.Warnings()[0].CoveredBy != "PRIMARY KEY" {
+			t.Errorf("expected CoveredBy 'PRIMARY KEY', got %q", restored.Warnings()[0].CoveredBy)
+		}
+	})
+
+	t.Run("from_json: missing warnings field is ok", func(t *testing.T) {
+		data := []byte(`{"version":1,"operations":[]}`)
+		plan, err := FromJSON(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(plan.Warnings()) != 0 {
+			t.Errorf("expected 0 warnings, got %d", len(plan.Warnings()))
+		}
+	})
+
 	t.Run("from_json rejects tampered plan with mismatched type and sql", func(t *testing.T) {
 		cases := []string{
 			// CreateTable with DROP TABLE sql.

@@ -70,6 +70,27 @@ does not access any database.
 
 **Returns:** a `MigrationPlan` containing the operations needed to transform
 `current` into `desired`. Returns an empty plan if the schemas are identical.
+Any redundant indexes in the desired schema are reported via
+`plan.warnings()`.
+
+---
+
+### `detect_redundant_indexes`
+
+```cpp
+std::vector<Warning> detect_redundant_indexes(const Schema& schema);
+```
+
+Analyse a schema for redundant indexes. Detects two kinds:
+
+- **Prefix-duplicate:** a non-unique index whose columns are a prefix of
+  another index on the same table (with the same `WHERE` clause).
+- **PK-duplicate:** an index whose columns are a prefix of the table's
+  `PRIMARY KEY` columns (non-unique), or an exact match (even if unique, since
+  the PK already implies uniqueness).
+
+`diff()` calls this on the desired schema automatically, but it is also
+available as a standalone function for direct schema analysis.
 
 ---
 
@@ -272,6 +293,7 @@ struct Trigger {
 class MigrationPlan {
 public:
     const std::vector<Operation>& operations() const;
+    const std::vector<Warning>& warnings() const;
     bool has_destructive_operations() const;
     bool empty() const;
 };
@@ -281,6 +303,7 @@ An ordered sequence of operations produced by `diff()`. The plan is immutable
 once created.
 
 - `operations()` -- returns the full list of operations in execution order.
+- `warnings()` -- returns any schema warnings (e.g. redundant indexes).
 - `has_destructive_operations()` -- returns `true` if any operation has
   `destructive == true`.
 - `empty()` -- returns `true` if there are no operations (schemas are
@@ -309,6 +332,38 @@ A single migration step.
   this is a single statement; for `RebuildTable` it contains the full 12-step
   sequence.
 - `destructive` -- `true` if this operation drops data.
+
+---
+
+### `WarningType`
+
+```cpp
+enum class WarningType {
+    RedundantIndex,
+};
+```
+
+---
+
+### `Warning`
+
+```cpp
+struct Warning {
+    WarningType type;
+    std::string message;
+    std::string index_name;
+    std::string covered_by;
+    std::string table_name;
+};
+```
+
+A non-fatal issue detected in the desired schema.
+
+- `type` -- the kind of warning (currently only `RedundantIndex`).
+- `message` -- human-readable description.
+- `index_name` -- the redundant index.
+- `covered_by` -- the covering index name, or `"PRIMARY KEY"`.
+- `table_name` -- the table both indexes belong to.
 
 ---
 

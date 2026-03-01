@@ -162,6 +162,27 @@ TEST_CASE("from_json rejects unknown OpType string") {
     ]})"), JsonError);
 }
 
+TEST_CASE("json round-trip: warnings preserved") {
+    Schema s = parse(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);"
+        "CREATE INDEX idx_id ON users(id);");
+    auto plan = diff(Schema{}, s);
+    REQUIRE(plan.warnings().size() == 1);
+
+    std::string json = to_json(plan);
+    auto restored = from_json(json);
+    REQUIRE(restored.warnings().size() == 1);
+    CHECK(restored.warnings()[0].index_name == "idx_id");
+    CHECK(restored.warnings()[0].covered_by == "PRIMARY KEY");
+    CHECK(restored.warnings()[0].table_name == "users");
+}
+
+TEST_CASE("from_json: missing warnings field is ok") {
+    auto json = R"({"version":1,"operations":[]})";
+    auto plan = from_json(json);
+    CHECK(plan.warnings().empty());
+}
+
 TEST_CASE("from_json rejects tampered plan with mismatched type and sql") {
     // A CreateTable operation should start with "CREATE TABLE", not "DROP TABLE"
     auto tampered_create =

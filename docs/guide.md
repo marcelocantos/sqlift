@@ -289,6 +289,57 @@ The recommended workaround is a two-step migration: first add a new table or
 column with the desired schema and migrate data at the application level, then
 retire the old structure in a subsequent release.
 
+## Redundant index detection
+
+`diff()` analyses the desired schema for redundant indexes and includes
+warnings in the returned plan. Two types of redundancy are detected:
+
+**Prefix-duplicate indexes.** If index A covers columns `(name, email)` and
+index B covers only `(name)` on the same table, B is redundant -- A already
+handles lookups on `name` alone. However, if B is `UNIQUE`, it is NOT flagged
+because it enforces a uniqueness constraint that A does not.
+
+**PK-duplicate indexes.** An explicit index whose columns match or are a prefix
+of the table's `PRIMARY KEY`. SQLite maintains an implicit index on PK columns,
+so an explicit index duplicating them wastes space. A `UNIQUE` index that
+exactly matches the PK columns is also flagged (the PK already implies
+uniqueness), but a `UNIQUE` index on a strict prefix of the PK is not (it
+enforces a tighter constraint).
+
+Warnings are informational -- they do not prevent `diff()` or `apply()` from
+succeeding. Inspect them to clean up unnecessary indexes:
+
+**C++:**
+
+```cpp
+auto plan = sqlift::diff(current, desired);
+for (const auto& w : plan.warnings())
+    std::cerr << w.message << "\n";
+```
+
+**Go:**
+
+```go
+plan, err := sqlift.Diff(current, desired)
+for _, w := range plan.Warnings() {
+    log.Println(w.Message)
+}
+```
+
+You can also analyse a schema independently:
+
+**C++:**
+
+```cpp
+auto warnings = sqlift::detect_redundant_indexes(desired);
+```
+
+**Go:**
+
+```go
+warnings := sqlift.DetectRedundantIndexes(desired)
+```
+
 ## Drift detection
 
 sqlift stores a SHA-256 hash of the schema in a `_sqlift_state` table after

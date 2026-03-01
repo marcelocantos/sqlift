@@ -36,10 +36,14 @@ type Operation struct {
 // MigrationPlan holds an ordered list of operations produced by [Diff].
 type MigrationPlan struct {
 	operations []Operation
+	warnings   []Warning
 }
 
 // Operations returns the ordered list of migration operations.
 func (p MigrationPlan) Operations() []Operation { return p.operations }
+
+// Warnings returns any schema warnings detected during diff.
+func (p MigrationPlan) Warnings() []Warning { return p.warnings }
 
 // HasDestructiveOperations reports whether any operation in the plan is
 // destructive (drops data).
@@ -443,6 +447,8 @@ func Diff(current, desired Schema) (MigrationPlan, error) {
 			})
 		}
 	}
+
+	plan.warnings = DetectRedundantIndexes(desired)
 
 	return plan, nil
 }

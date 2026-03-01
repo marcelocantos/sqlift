@@ -1404,7 +1404,162 @@ MigrationPlan diff(const Schema& current, const Schema& desired) {
         }
     }
 
+    plan.warnings_ = detect_redundant_indexes(desired);
+
     return plan;
+}
+
+std::vector<Warning> detect_redundant_indexes(const Schema& schema) {
+    std::vector<Warning> warnings;
+    std::set<std::string> pk_flagged; // Indexes already flagged as PK-duplicate.
+
+    // Group indexes by table.
+    std::map<std::string, std::vector<const Index*>> by_table;
+    for (const auto& [name, idx] : schema.indexes)
+        by_table[idx.table_name].push_back(&idx);
+
+    for (const auto& [table_name, table] : schema.tables) {
+        // Build PK column list ordered by pk position.
+        std::vector<std::pair<int, std::string>> pk_pairs;
+        for (const auto& col : table.columns) {
+            if (col.pk > 0)
+                pk_pairs.push_back({col.pk, col.name});
+        }
+        std::sort(pk_pairs.begin(), pk_pairs.end());
+        std::vector<std::string> pk_columns;
+        for (const auto& [pos, name] : pk_pairs)
+            pk_columns.push_back(name);
+
+        auto it = by_table.find(table_name);
+        if (it == by_table.end()) continue;
+        const auto& indexes = it->second;
+
+        // --- PK-duplicate detection ---
+        if (!pk_columns.empty()) {
+            for (const auto* idx : indexes) {
+                // Partial indexes can't be PK-duplicates (PK has no WHERE).
+                if (!idx->where_clause.empty()) continue;
+
+                if (idx->columns.size() > pk_columns.size()) continue;
+
+                // Check if idx->columns is a prefix of pk_columns.
+                if (!std::equal(idx->columns.begin(), idx->columns.end(),
+                                pk_columns.begin())) continue;
+
+                bool exact_match = (idx->columns.size() == pk_columns.size());
+                if (exact_match || !idx->unique) {
+                    // Exact PK match: always redundant (PK implies uniqueness).
+                    // Strict prefix + non-unique: redundant (PK index covers lookups).
+                    // Strict prefix + unique: NOT redundant (tighter constraint).
+                    pk_flagged.insert(idx->name);
+                    warnings.push_back({
+                        .type = WarningType::RedundantIndex,
+                        .message = "Index '" + idx->name + "' on table '" +
+                                   table_name + "' is redundant: columns are " +
+                                   (exact_match ? "identical to" : "a prefix of") +
+                                   " PRIMARY KEY",
+                        .index_name = idx->name,
+                        .covered_by = "PRIMARY KEY",
+                        .table_name = table_name,
+                    });
+                }
+            }
+        }
+
+        // --- Prefix-duplicate detection ---
+        for (const auto* shorter : indexes) {
+            if (pk_flagged.count(shorter->name)) continue;
+
+            for (const auto* longer : indexes) {
+                if (shorter == longer) continue;
+                if (pk_flagged.count(longer->name)) continue;
+                if (shorter->columns.size() >= longer->columns.size()) continue;
+                if (shorter->where_clause != longer->where_clause) continue;
+
+                // Check if shorter->columns is a strict prefix of longer->columns.
+                if (!std::equal(shorter->columns.begin(), shorter->columns.end(),
+                                longer->columns.begin())) continue;
+
+                // Non-unique shorter: always redundant (longer covers lookups).
+                // Unique shorter: enforces a tighter constraint, NOT redundant.
+                if (!shorter->unique) {
+                    warnings.push_back({
+                        .type = WarningType::RedundantIndex,
+                        .message = "Index '" + shorter->name + "' on table '" +
+                                   table_name + "' is redundant: columns are a prefix of index '" +
+                                   longer->name + "'",
+                        .index_name = shorter->name,
+                        .covered_by = longer->name,
+                        .table_name = table_name,
+                    });
+                    break; // One warning per redundant index.
+                }
+            }
+        }
+
+        // --- Exact-duplicate detection (same columns, same WHERE) ---
+        for (size_t i = 0; i < indexes.size(); ++i) {
+            if (pk_flagged.count(indexes[i]->name)) continue;
+
+            for (size_t j = i + 1; j < indexes.size(); ++j) {
+                if (pk_flagged.count(indexes[j]->name)) continue;
+                if (indexes[i]->columns != indexes[j]->columns) continue;
+                if (indexes[i]->where_clause != indexes[j]->where_clause) continue;
+
+                // Same columns, same WHERE. Determine which is redundant.
+                const Index* redundant = nullptr;
+                const Index* keeper = nullptr;
+
+                if (indexes[i]->unique == indexes[j]->unique) {
+                    // Same uniqueness: flag the later one alphabetically.
+                    if (indexes[i]->name < indexes[j]->name) {
+                        redundant = indexes[j];
+                        keeper = indexes[i];
+                    } else {
+                        redundant = indexes[i];
+                        keeper = indexes[j];
+                    }
+                } else if (!indexes[i]->unique) {
+                    // i is non-unique, j is unique: i is redundant.
+                    redundant = indexes[i];
+                    keeper = indexes[j];
+                } else {
+                    // i is unique, j is non-unique: j is redundant.
+                    redundant = indexes[j];
+                    keeper = indexes[i];
+                }
+
+                // Skip if this index was already flagged as prefix-duplicate.
+                bool already_warned = false;
+                for (const auto& w : warnings) {
+                    if (w.index_name == redundant->name) {
+                        already_warned = true;
+                        break;
+                    }
+                }
+                if (already_warned) continue;
+
+                warnings.push_back({
+                    .type = WarningType::RedundantIndex,
+                    .message = "Index '" + redundant->name + "' on table '" +
+                               table_name + "' is redundant: duplicate of index '" +
+                               keeper->name + "'",
+                    .index_name = redundant->name,
+                    .covered_by = keeper->name,
+                    .table_name = table_name,
+                });
+            }
+        }
+    }
+
+    // Sort warnings by (table_name, index_name) for deterministic output.
+    std::sort(warnings.begin(), warnings.end(),
+              [](const Warning& a, const Warning& b) {
+                  if (a.table_name != b.table_name) return a.table_name < b.table_name;
+                  return a.index_name < b.index_name;
+              });
+
+    return warnings;
 }
 
 
@@ -1609,6 +1764,20 @@ std::string to_json(const MigrationPlan& plan) {
         ops.push_back(std::move(jop));
     }
 
+    if (!plan.warnings().empty()) {
+        auto& warns = j["warnings"];
+        warns = nlohmann::json::array();
+        for (const auto& w : plan.warnings()) {
+            nlohmann::json jw;
+            jw["type"] = "RedundantIndex";
+            jw["message"] = w.message;
+            jw["index_name"] = w.index_name;
+            jw["covered_by"] = w.covered_by;
+            jw["table_name"] = w.table_name;
+            warns.push_back(std::move(jw));
+        }
+    }
+
     return j.dump(2);
 }
 
@@ -1688,6 +1857,20 @@ MigrationPlan from_json(const std::string& json_str) {
         }
 
         plan.ops_.push_back(std::move(op));
+    }
+
+    // Warnings are optional (backward-compatible with older JSON).
+    if (j.contains("warnings") && j["warnings"].is_array()) {
+        for (const auto& jw : j["warnings"]) {
+            if (!jw.is_object()) continue;
+            Warning w;
+            w.type = WarningType::RedundantIndex;
+            w.message = jw.value("message", "");
+            w.index_name = jw.value("index_name", "");
+            w.covered_by = jw.value("covered_by", "");
+            w.table_name = jw.value("table_name", "");
+            plan.warnings_.push_back(std::move(w));
+        }
     }
 
     return plan;
