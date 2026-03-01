@@ -32,3 +32,24 @@ jobs:
 
       - name: Sanitizer test
         run: mk sanitize
+
+  test-go:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go/sqlift/go.mod
+
+      - name: Test
+        working-directory: go/sqlift
+        run: go test -v -count=1 ./...
+
+      - name: Vet
+        working-directory: go/sqlift
+        run: go vet ./...
