@@ -13,16 +13,16 @@ format for cross-language drift detection.
 
 ## Interaction surface catalogue
 
-Snapshot as of v0.8.0.
+Snapshot as of v0.9.0.
 
 ### C++ API
 
 #### Version macros
 
 ```cpp
-#define SQLIFT_VERSION       "0.8.0"
+#define SQLIFT_VERSION       "0.9.0"
 #define SQLIFT_VERSION_MAJOR 0
-#define SQLIFT_VERSION_MINOR 8
+#define SQLIFT_VERSION_MINOR 9
 #define SQLIFT_VERSION_PATCH 0
 ```
 
@@ -35,10 +35,11 @@ Schema        parse(const std::string& sql);
 Schema        extract(sqlite3* db);
 MigrationPlan diff(const Schema& current, const Schema& desired);
 void          apply(sqlite3* db, const MigrationPlan& plan, const ApplyOptions& opts = {});
+int64_t       migration_version(sqlite3* db);
 ```
 
-**Stable.** These four functions are the entire public workflow. Signatures have
-not changed since v0.1.0.
+**Stable.** These five functions are the entire public workflow. Core four
+signatures have not changed since v0.1.0; `migration_version` added in v0.4.0.
 
 #### Schema types
 
@@ -418,9 +419,6 @@ without triggering drift detection. This is verified by
 
 ## Gaps and prerequisites
 
-- **Go documentation**: The agent guide (`dist/agents-guide.md`) and reference
-  docs (`docs/reference.md`, `docs/guide.md`) cover only C++. Go equivalents
-  or a combined guide should exist before 1.0.
 - **Go package documentation**: Go doc comments are present but could benefit
   from runnable examples (`Example*` test functions).
 
