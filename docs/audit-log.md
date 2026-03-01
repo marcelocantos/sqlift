@@ -53,3 +53,12 @@ maintenance activities. Append-only — newest entries at the bottom.
   - 11 Low + 3 Info audit findings (see `docs/audit-2026-02-28.md`)
   - Redundant index detection (TODO)
   - 1.0 settling threshold: 0/3 consecutive minor releases without breaking changes
+
+## 2026-03-01 — /release v0.8.0
+
+- **Commit**: `3ec729f`
+- **Outcome**: Released v0.8.0. Go port of full library (`go/sqlift` package, 127 tests), cross-language SHA-256 hash verification, Go CI job (test + vet on ubuntu + macOS), source files moved to `dist/`, README/STABILITY.md/agent guide updated for both C++ and Go, repo description updated.
+- **Notes**:
+  - C++ tests: 109 (was 108), 340 assertions
+  - Go tests: 127
+  - 1.0 settling threshold: 1/3 consecutive minor releases without breaking changes
