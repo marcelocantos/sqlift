@@ -71,3 +71,12 @@ maintenance activities. Append-only — newest entries at the bottom.
   - C++ tests: 109, 340 assertions
   - Go tests: 127
   - 1.0 settling threshold: 2/4 consecutive minor releases without breaking changes (surface expanded to ~62 items, N increased from 3 to 4)
+
+## 2026-03-01 — /release v0.10.0
+
+- **Commit**: `82c4c72`
+- **Outcome**: Released v0.10.0. Redundant index detection: `detect_redundant_indexes()` / `DetectRedundantIndexes()` in both C++ and Go, integrated into `diff()` / `Diff()` with warnings on `MigrationPlan`. Detects PK-duplicate, prefix-duplicate, and exact-duplicate indexes. New types: `WarningType`, `Warning`. STABILITY.md updated with new surface items; "Redundant index detection" removed from out-of-scope list.
+- **Notes**:
+  - C++ tests: 122, 368 assertions
+  - Go tests: 140
+  - 1.0 settling threshold: 4/4 — threshold reached. Remaining gap: Go `Example*` test functions
