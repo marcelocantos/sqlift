@@ -5,9 +5,9 @@
 
 // sqlift - Declarative SQLite schema migration library
 
-#define SQLIFT_VERSION "0.10.0"
+#define SQLIFT_VERSION "0.11.0"
 #define SQLIFT_VERSION_MAJOR 0
-#define SQLIFT_VERSION_MINOR 10
+#define SQLIFT_VERSION_MINOR 11
 #define SQLIFT_VERSION_PATCH 0
 
 #include <cstdint>

@@ -13,16 +13,16 @@ format for cross-language drift detection.
 
 ## Interaction surface catalogue
 
-Snapshot as of v0.10.0.
+Snapshot as of v0.11.0.
 
 ### C++ API
 
 #### Version macros
 
 ```cpp
-#define SQLIFT_VERSION       "0.10.0"
+#define SQLIFT_VERSION       "0.11.0"
 #define SQLIFT_VERSION_MAJOR 0
-#define SQLIFT_VERSION_MINOR 10
+#define SQLIFT_VERSION_MINOR 11
 #define SQLIFT_VERSION_PATCH 0
 ```
 
