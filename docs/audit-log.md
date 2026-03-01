@@ -62,3 +62,12 @@ maintenance activities. Append-only — newest entries at the bottom.
   - C++ tests: 109 (was 108), 340 assertions
   - Go tests: 127
   - 1.0 settling threshold: 1/3 consecutive minor releases without breaking changes
+
+## 2026-03-01 — /release v0.9.0
+
+- **Commit**: `c268876`
+- **Outcome**: Released v0.9.0. Documentation overhaul: new getting-started tutorial (`docs/getting-started.md`), Go API reference (`docs/reference-go.md`), guide rewrite with declarative-vs-numbered pitch and bilingual C++/Go examples, C++ reference cross-references, README doc links updated. STABILITY.md: added `migration_version` to C++ catalogue, resolved Go docs gap.
+- **Notes**:
+  - C++ tests: 109, 340 assertions
+  - Go tests: 127
+  - 1.0 settling threshold: 2/4 consecutive minor releases without breaking changes (surface expanded to ~62 items, N increased from 3 to 4)
