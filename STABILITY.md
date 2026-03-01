@@ -13,16 +13,16 @@ format for cross-language drift detection.
 
 ## Interaction surface catalogue
 
-Snapshot as of v0.9.0.
+Snapshot as of v0.10.0.
 
 ### C++ API
 
 #### Version macros
 
 ```cpp
-#define SQLIFT_VERSION       "0.9.0"
+#define SQLIFT_VERSION       "0.10.0"
 #define SQLIFT_VERSION_MAJOR 0
-#define SQLIFT_VERSION_MINOR 9
+#define SQLIFT_VERSION_MINOR 10
 #define SQLIFT_VERSION_PATCH 0
 ```
 
@@ -31,15 +31,18 @@ Snapshot as of v0.9.0.
 #### Core functions
 
 ```cpp
-Schema        parse(const std::string& sql);
-Schema        extract(sqlite3* db);
-MigrationPlan diff(const Schema& current, const Schema& desired);
-void          apply(sqlite3* db, const MigrationPlan& plan, const ApplyOptions& opts = {});
-int64_t       migration_version(sqlite3* db);
+Schema               parse(const std::string& sql);
+Schema               extract(sqlite3* db);
+MigrationPlan        diff(const Schema& current, const Schema& desired);
+void                 apply(sqlite3* db, const MigrationPlan& plan, const ApplyOptions& opts = {});
+int64_t              migration_version(sqlite3* db);
+std::vector<Warning> detect_redundant_indexes(const Schema& schema);
 ```
 
-**Stable.** These five functions are the entire public workflow. Core four
-signatures have not changed since v0.1.0; `migration_version` added in v0.4.0.
+**Stable.** The first five functions are the core workflow (unchanged since
+v0.1.0 except `migration_version` added in v0.4.0).
+`detect_redundant_indexes` added in v0.10.0 — also called automatically by
+`diff()`, with results available via `MigrationPlan::warnings()`.
 
 #### Schema types
 
@@ -149,6 +152,25 @@ struct Trigger {
 
 **Stable.**
 
+#### Warning types
+
+```cpp
+enum class WarningType {
+    RedundantIndex,
+};
+
+struct Warning {
+    WarningType type;
+    std::string message;        // Human-readable description.
+    std::string index_name;     // The redundant index.
+    std::string covered_by;     // The covering index name, or "PRIMARY KEY".
+    std::string table_name;
+};
+```
+
+**Stable.** Added in v0.10.0. WarningType may gain new variants in future
+(additive, not breaking).
+
 #### Migration plan and operations
 
 ```cpp
@@ -170,6 +192,7 @@ struct Operation {
 class MigrationPlan {
 public:
     const std::vector<Operation>& operations() const;
+    const std::vector<Warning>& warnings() const;
     bool has_destructive_operations() const;
     bool empty() const;
 };
@@ -265,11 +288,14 @@ func Extract(ctx context.Context, db *sql.DB) (Schema, error)
 func Diff(current, desired Schema) (MigrationPlan, error)
 func Apply(ctx context.Context, db *sql.DB, plan MigrationPlan, opts ApplyOptions) error
 func MigrationVersion(ctx context.Context, db *sql.DB) (int64, error)
+func DetectRedundantIndexes(schema Schema) []Warning
 ```
 
 **Stable.** Direct ports of the C++ functions. `Extract` and `Apply` take
 `context.Context` and `*sql.DB` (standard Go database patterns). `Apply`
-returns `error` instead of throwing.
+returns `error` instead of throwing. `DetectRedundantIndexes` added in
+v0.10.0 — also called automatically by `Diff()`, with results available via
+`MigrationPlan.Warnings()`.
 
 #### Schema types
 
@@ -341,6 +367,26 @@ func (s Schema) Hash() string
 
 **Stable.** Mirrors the C++ types with Go naming conventions.
 
+#### Warning types
+
+```go
+type WarningType int
+
+const (
+    RedundantIndex WarningType = iota
+)
+
+type Warning struct {
+    Type      WarningType
+    Message   string // Human-readable description.
+    IndexName string // The redundant index.
+    CoveredBy string // The covering index name, or "PRIMARY KEY".
+    TableName string // The table both indexes belong to.
+}
+```
+
+**Stable.** Added in v0.10.0. Mirrors the C++ warning types.
+
 #### Migration plan and operations
 
 ```go
@@ -372,6 +418,7 @@ type Operation struct {
 type MigrationPlan struct { /* unexported fields */ }
 
 func (p MigrationPlan) Operations() []Operation
+func (p MigrationPlan) Warnings() []Warning
 func (p MigrationPlan) HasDestructiveOperations() bool
 func (p MigrationPlan) Empty() bool
 
@@ -429,5 +476,3 @@ without triggering drift detection. This is verified by
 - **Data migration.** sqlift is schema-only; data transforms are the caller's
   responsibility.
 - **Cross-database support.** SQLite-only by design.
-- **Redundant index detection.** Warning when desired schema has prefix-
-  duplicate or PK-duplicate indexes.
