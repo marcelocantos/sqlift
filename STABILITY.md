@@ -3,13 +3,21 @@
 ## Commitment
 
 Version 1.0 represents a backwards-compatibility contract. After 1.0, any
-breaking change to the public API, exception hierarchy, JSON serialization
-format, or `_sqlift_state` schema would require forking the project into a new
-product (e.g. `sqlift2`). The pre-1.0 period exists to get these surfaces right.
+breaking change to the public API (C++ or Go), error hierarchy, JSON
+serialization format, or `_sqlift_state` schema would require forking the
+project into a new product (e.g. `sqlift2`). The pre-1.0 period exists to get
+these surfaces right.
+
+Both the C++ and Go implementations share the same schema hash serialization
+format for cross-language drift detection.
 
 ## Interaction surface catalogue
 
-### Version macros
+Snapshot as of v0.8.0.
+
+### C++ API
+
+#### Version macros
 
 ```cpp
 #define SQLIFT_VERSION       "0.7.0"
@@ -20,7 +28,7 @@ product (e.g. `sqlift2`). The pre-1.0 period exists to get these surfaces right.
 
 **Stable.** Mechanical; updated each release.
 
-### Core functions
+#### Core functions
 
 ```cpp
 Schema        parse(const std::string& sql);
@@ -32,7 +40,7 @@ void          apply(sqlite3* db, const MigrationPlan& plan, const ApplyOptions& 
 **Stable.** These four functions are the entire public workflow. Signatures have
 not changed since v0.1.0.
 
-### Schema types
+#### Schema types
 
 ```cpp
 struct Schema {
@@ -140,7 +148,7 @@ struct Trigger {
 
 **Stable.**
 
-### Migration plan and operations
+#### Migration plan and operations
 
 ```cpp
 enum class OpType {
@@ -176,7 +184,7 @@ struct ApplyOptions {
 
 **Stable.** New fields can be added with defaults (additive).
 
-### JSON serialization
+#### JSON serialization
 
 ```cpp
 std::string to_string(OpType type);
@@ -188,7 +196,7 @@ MigrationPlan from_json(const std::string& json_str);
 **Stable.** JSON format is versioned (`"version": 1`). New fields can be added
 without breaking existing consumers.
 
-### Exception hierarchy
+#### Exception hierarchy
 
 ```
 std::runtime_error
@@ -206,7 +214,7 @@ std::runtime_error
 **Stable.** New exception types can be added under `Error` (additive). Existing
 types will not be removed or reparented.
 
-### Utility classes
+#### Utility classes
 
 ```cpp
 class Database {
@@ -239,15 +247,182 @@ public:
 **Stable.** These are thin RAII wrappers. The only change since v0.1.0 was
 widening int to int64_t in v0.4.0.
 
-### Internal utilities
+#### Internal utilities
 
 `sha256()` was moved to a file-local function in sqlift.cpp in v0.6.0. It is no
 longer part of the public API.
 
+### Go API
+
+Module: `github.com/marcelocantos/sqlift/go/sqlift`
+
+#### Core functions
+
+```go
+func Parse(ddl string) (Schema, error)
+func Extract(ctx context.Context, db *sql.DB) (Schema, error)
+func Diff(current, desired Schema) (MigrationPlan, error)
+func Apply(ctx context.Context, db *sql.DB, plan MigrationPlan, opts ApplyOptions) error
+func MigrationVersion(ctx context.Context, db *sql.DB) (int64, error)
+```
+
+**Stable.** Direct ports of the C++ functions. `Extract` and `Apply` take
+`context.Context` and `*sql.DB` (standard Go database patterns). `Apply`
+returns `error` instead of throwing.
+
+#### Schema types
+
+```go
+type GeneratedType int
+
+const (
+    GeneratedNormal  GeneratedType = 0
+    GeneratedVirtual GeneratedType = 2
+    GeneratedStored  GeneratedType = 3
+)
+
+type Column struct {
+    Name, Type    string
+    NotNull       bool
+    DefaultValue  string
+    PK            int
+    Collation     string
+    Generated     GeneratedType
+    GeneratedExpr string
+}
+
+type CheckConstraint struct {
+    Name       string
+    Expression string
+}
+
+type ForeignKey struct {
+    ConstraintName string     // Cosmetic; excluded from Equal and Hash.
+    FromColumns    []string
+    ToTable        string
+    ToColumns      []string
+    OnUpdate       string     // Default "NO ACTION".
+    OnDelete       string     // Default "NO ACTION".
+}
+
+type Table struct {
+    Name             string
+    Columns          []Column
+    ForeignKeys      []ForeignKey
+    CheckConstraints []CheckConstraint
+    PKConstraintName string   // Cosmetic; excluded from Equal and Hash.
+    WithoutRowid     bool
+    Strict           bool
+    RawSQL           string   // Excluded from Equal and Hash.
+}
+
+type Index struct {
+    Name, TableName string
+    Columns         []string
+    Unique          bool
+    WhereClause     string
+    RawSQL          string   // Excluded from Equal and Hash.
+}
+
+type View    struct { Name, SQL string }
+type Trigger struct { Name, TableName, SQL string }
+
+type Schema struct {
+    Tables   map[string]Table
+    Indexes  map[string]Index
+    Views    map[string]View
+    Triggers map[string]Trigger
+}
+
+func (s Schema) Equal(o Schema) bool
+func (s Schema) Hash() string
+```
+
+**Stable.** Mirrors the C++ types with Go naming conventions.
+
+#### Migration plan and operations
+
+```go
+type OpType int
+
+const (
+    CreateTable OpType = iota
+    DropTable
+    RebuildTable
+    AddColumn
+    CreateIndex
+    DropIndex
+    CreateView
+    DropView
+    CreateTrigger
+    DropTrigger
+)
+
+func (t OpType) String() string
+
+type Operation struct {
+    Type        OpType
+    ObjectName  string
+    Description string
+    SQL         []string
+    Destructive bool
+}
+
+type MigrationPlan struct { /* unexported fields */ }
+
+func (p MigrationPlan) Operations() []Operation
+func (p MigrationPlan) HasDestructiveOperations() bool
+func (p MigrationPlan) Empty() bool
+
+type ApplyOptions struct {
+    AllowDestructive bool
+}
+```
+
+**Stable.** Mirrors the C++ types.
+
+#### JSON serialization
+
+```go
+func ToJSON(plan MigrationPlan) ([]byte, error)
+func FromJSON(data []byte) (MigrationPlan, error)
+func ParseOpType(s string) (OpType, error)
+```
+
+**Stable.** Same JSON wire format (`"version": 1`) as C++.
+
+#### Error types
+
+```go
+*ParseError
+*ExtractError
+*DiffError
+*ApplyError
+*DriftError
+*DestructiveError
+*BreakingChangeError
+*JSONError
+```
+
+**Stable.** Each has a `Msg string` field and implements `error`. Mirrors the
+C++ exception hierarchy. Use `errors.As` for type assertions.
+
+### Cross-language compatibility
+
+The hash serialization format is identical between C++ and Go. A database
+migrated by the C++ library can be read by the Go library (and vice versa)
+without triggering drift detection. This is verified by
+`TestCrossLanguageHash` (Go) and `"cross-language hash"` (C++ doctest).
+
+**Stable.**
+
 ## Gaps and prerequisites
 
-None. All documentation is current, API design decisions are resolved, and
-third-party attribution is in place (THIRD_PARTY_LICENSES.md).
+- **Go documentation**: The agent guide (`dist/agents-guide.md`) and reference
+  docs (`docs/reference.md`, `docs/guide.md`) cover only C++. Go equivalents
+  or a combined guide should exist before 1.0.
+- **Go package documentation**: Go doc comments are present but could benefit
+  from runnable examples (`Example*` test functions).
 
 ## Out of scope for 1.0
 

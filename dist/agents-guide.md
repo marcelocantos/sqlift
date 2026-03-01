@@ -1,7 +1,10 @@
 # sqlift -- Agent Guide
 
-Declarative SQLite schema migration. Two files: `dist/sqlift.h` + `dist/sqlift.cpp`.
-Requires C++23 and SQLite3. No other dependencies.
+Declarative SQLite schema migration. Available in C++ and Go.
+
+## C++
+
+Two files: `dist/sqlift.h` + `dist/sqlift.cpp`. Requires C++23 and SQLite3.
 
 ```cpp
 #include "sqlift.h"
@@ -9,7 +12,7 @@ Requires C++23 and SQLite3. No other dependencies.
 
 Everything is in `namespace sqlift`.
 
-## Core workflow
+### Core workflow
 
 ```cpp
 // 1. Declare desired schema as plain SQL
@@ -34,9 +37,9 @@ if (!plan.empty())
     sqlift::apply(db, plan);
 ```
 
-## API surface
+### API surface
 
-### Functions
+#### Functions
 
 | Function | Signature | Does |
 |----------|-----------|------|
@@ -50,7 +53,7 @@ if (!plan.empty())
 | `op_type_from_string` | `OpType op_type_from_string(const string& s)` | Parse string to OpType. Throws `JsonError`. |
 | `migration_version` | `int64_t migration_version(sqlite3* db)` | Migration version counter (0 if no migrations have run, increments by 1 on each non-empty apply). |
 
-### Schema types
+#### Schema types
 
 ```cpp
 enum class GeneratedType { Normal = 0, Virtual = 2, Stored = 3 };
@@ -112,7 +115,7 @@ struct Schema {
 };
 ```
 
-### Migration types
+#### Migration types
 
 ```cpp
 enum class OpType {
@@ -141,7 +144,7 @@ struct ApplyOptions {
 };
 ```
 
-### RAII wrappers
+#### RAII wrappers
 
 ```cpp
 // Database: opens on construction, closes on destruction. Move-only.
@@ -158,7 +161,7 @@ if (stmt.step()) {              // true = row available, false = done
 }
 ```
 
-### Exceptions
+#### Exceptions
 
 All inherit from `sqlift::Error` (inherits `std::runtime_error`):
 
@@ -173,7 +176,7 @@ All inherit from `sqlift::Error` (inherits `std::runtime_error`):
 | `DriftError` | Schema modified outside sqlift since last `apply()` |
 | `JsonError` | Invalid JSON or missing fields in `from_json()` / `op_type_from_string()` |
 
-## Key behaviours
+### Key behaviours
 
 - **AddColumn fast path**: When the only change is appending nullable columns (or NOT NULL with DEFAULT) at the end, uses `ALTER TABLE ADD COLUMN`.
 - **12-step table rebuild**: Any other table change uses SQLite's recommended rebuild (disable FKs, savepoint, create new, copy data, drop old, rename, recreate indexes/triggers/views, FK check, release, re-enable FKs).
@@ -184,7 +187,7 @@ All inherit from `sqlift::Error` (inherits `std::runtime_error`):
 - **Operation order**: Drop triggers/views/indexes, then table ops, then create indexes/views/triggers.
 - **`raw_sql` excluded from equality**: SQLite doesn't update `sqlite_master.sql` after `ALTER TABLE ADD COLUMN`, so Table/Index equality is structural only.
 
-## Common patterns
+### Common patterns
 
 ```cpp
 // Inspect plan before applying
@@ -210,6 +213,107 @@ std::string json = sqlift::to_json(plan);
 auto restored = sqlift::from_json(json);
 sqlift::apply(db, restored);
 ```
+
+## Go
+
+Module: `github.com/marcelocantos/sqlift/go/sqlift`. Requires CGo (uses
+`github.com/mattn/go-sqlite3`).
+
+```go
+import "github.com/marcelocantos/sqlift/go/sqlift"
+```
+
+### Core workflow
+
+```go
+ctx := context.Background()
+
+// 1. Declare desired schema as plain SQL
+desired, err := sqlift.Parse(`
+    CREATE TABLE users (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        email TEXT UNIQUE
+    );
+    CREATE INDEX idx_email ON users(email);
+`)
+
+// 2. Extract current schema from a live database
+db, _ := sql.Open("sqlite3", "app.db")
+current, err := sqlift.Extract(ctx, db)
+
+// 3. Diff (pure function, no DB access)
+plan, err := sqlift.Diff(current, desired)
+
+// 4. Apply
+if !plan.Empty() {
+    err = sqlift.Apply(ctx, db, plan, sqlift.ApplyOptions{})
+}
+```
+
+### API surface
+
+#### Functions
+
+| Function | Signature | Does |
+|----------|-----------|------|
+| `Parse` | `func Parse(ddl string) (Schema, error)` | Parse DDL into Schema. Returns `*ParseError`. |
+| `Extract` | `func Extract(ctx context.Context, db *sql.DB) (Schema, error)` | Read schema from live DB. |
+| `Diff` | `func Diff(current, desired Schema) (MigrationPlan, error)` | Pure diff. Returns `*BreakingChangeError` on unsafe changes. |
+| `Apply` | `func Apply(ctx context.Context, db *sql.DB, plan MigrationPlan, opts ApplyOptions) error` | Execute plan. Returns `*DestructiveError`, `*DriftError`, `*ApplyError`. |
+| `ToJSON` | `func ToJSON(plan MigrationPlan) ([]byte, error)` | Serialize plan to JSON bytes. |
+| `FromJSON` | `func FromJSON(data []byte) (MigrationPlan, error)` | Deserialize plan from JSON. Returns `*JSONError`. |
+| `ParseOpType` | `func ParseOpType(s string) (OpType, error)` | Parse string to OpType. Returns `*JSONError`. |
+| `MigrationVersion` | `func MigrationVersion(ctx context.Context, db *sql.DB) (int64, error)` | Migration version counter. |
+
+#### Error types
+
+All implement `error` with a `Msg string` field. Use `errors.As` for type assertions.
+
+| Error type | When |
+|------------|------|
+| `*ParseError` | Invalid SQL in `Parse()` |
+| `*ExtractError` | Schema extraction fails |
+| `*DiffError` | Internal diff error |
+| `*BreakingChangeError` | Schema change is backwards-incompatible |
+| `*ApplyError` | SQL fails during `Apply()` |
+| `*DestructiveError` | Plan has destructive ops, `AllowDestructive` is false |
+| `*DriftError` | Schema modified outside sqlift since last `Apply()` |
+| `*JSONError` | Invalid JSON in `FromJSON()` / `ParseOpType()` |
+
+### Common patterns
+
+```go
+// Inspect plan before applying
+for _, op := range plan.Operations() {
+    fmt.Println(op.Description)
+    if op.Destructive {
+        fmt.Println("  [DESTRUCTIVE]")
+    }
+}
+
+// Allow destructive operations (drops)
+err := sqlift.Apply(ctx, db, plan, sqlift.ApplyOptions{AllowDestructive: true})
+
+// Handle drift
+var driftErr *sqlift.DriftError
+if errors.As(err, &driftErr) {
+    // Schema was modified outside sqlift
+}
+
+// Serialize plan to JSON
+data, _ := sqlift.ToJSON(plan)
+
+// Deserialize and apply on another machine
+restored, _ := sqlift.FromJSON(data)
+sqlift.Apply(ctx, db, restored, sqlift.ApplyOptions{})
+```
+
+### Cross-language compatibility
+
+The Go and C++ implementations produce identical schema hashes. A database
+migrated by C++ sqlift can be read and further migrated by the Go library
+(and vice versa) without triggering drift detection.
 
 ## Agentic migration guidance
 
