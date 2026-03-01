@@ -466,8 +466,8 @@ without triggering drift detection. This is verified by
 
 ## Gaps and prerequisites
 
-- **Go package documentation**: Go doc comments are present but could benefit
-  from runnable examples (`Example*` test functions).
+No known gaps remain. All public API surfaces have documentation, tests, and
+runnable Go examples.
 
 ## Out of scope for 1.0
 
