@@ -86,6 +86,33 @@ TEST_CASE("roundtrip: v1 to v2 migration") {
     CHECK(plan2.empty());
 }
 
+TEST_CASE("cross-language hash: known DDL produces expected SHA-256") {
+    // This DDL and expected hash are shared with the Go test suite
+    // (go/sqlift/schema_test.go TestCrossLanguageHash). If either the C++
+    // or Go hash implementation diverges, one test will fail.
+    auto ddl =
+        "CREATE TABLE users ("
+        "    id INTEGER PRIMARY KEY,"
+        "    name TEXT NOT NULL,"
+        "    email TEXT COLLATE NOCASE,"
+        "    age INTEGER CHECK(age > 0),"
+        "    FOREIGN KEY (id) REFERENCES users(id) ON DELETE CASCADE ON UPDATE NO ACTION"
+        ");"
+        "CREATE TABLE posts ("
+        "    id INTEGER PRIMARY KEY,"
+        "    user_id INTEGER NOT NULL REFERENCES users(id),"
+        "    title TEXT NOT NULL DEFAULT '',"
+        "    body TEXT"
+        ");"
+        "CREATE INDEX idx_posts_user ON posts(user_id);"
+        "CREATE UNIQUE INDEX idx_users_email ON users(email);"
+        "CREATE VIEW active_users AS SELECT id, name FROM users WHERE age > 18;"
+        "CREATE TRIGGER trg_posts_delete AFTER DELETE ON posts BEGIN SELECT 1; END;";
+
+    Schema schema = parse(ddl);
+    CHECK(schema.hash() == "e712ade60030bfb83109e2bc49ba2d6d3025ade275dffde2a33ea5279dc99c13");
+}
+
 TEST_CASE("roundtrip: v1 to v2 to v3 breaking change rejected") {
     auto v1 = "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);";
     auto v2 = "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT);";
