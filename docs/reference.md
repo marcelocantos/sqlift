@@ -1,7 +1,10 @@
-# API Reference
+# C++ API Reference
 
 All types and functions live in the `sqlift` namespace. Include `"sqlift.h"` to
 access everything.
+
+For the Go API, see [Go API Reference](reference-go.md). For conceptual
+background, see [Guide](guide.md).
 
 ## Core functions
 

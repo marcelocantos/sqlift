@@ -2,8 +2,9 @@
 
 Declarative SQLite schema migration for C++ and Go.
 
-Declare your desired schema as plain SQL. sqlift computes the diff against a live
-database and applies the changes.
+Maintain your schema as a single SQL file. sqlift diffs it against your database
+and applies the changes -- no numbered migration files, no ordering conflicts, no
+mental replay of fifty ALTER TABLEs to understand your schema.
 
 ### C++
 
@@ -77,9 +78,11 @@ condensed API reference covering both C++ and Go.
 
 ## Documentation
 
-- **[Guide](docs/guide.md)** -- walkthrough of core concepts and common workflows (C++)
-- **[Reference](docs/reference.md)** -- complete API reference (C++)
-- **[Agent Guide](dist/agents-guide.md)** -- condensed reference for AI coding agents (C++ and Go)
+- **[Getting Started](docs/getting-started.md)** -- step-by-step tutorial with C++ and Go examples
+- **[Guide](docs/guide.md)** -- design rationale, core concepts, and feature reference
+- **[C++ API Reference](docs/reference.md)** -- complete C++ API reference
+- **[Go API Reference](docs/reference-go.md)** -- complete Go API reference
+- **[Agent Guide](dist/agents-guide.md)** -- condensed reference for AI coding agents
 - **[Changelog](https://github.com/marcelocantos/sqlift/releases)** -- release history with notes
 
 ## Building and testing
