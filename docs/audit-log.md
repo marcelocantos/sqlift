@@ -80,3 +80,12 @@ maintenance activities. Append-only — newest entries at the bottom.
   - C++ tests: 122, 368 assertions
   - Go tests: 140
   - 1.0 settling threshold: 4/4 — threshold reached. Remaining gap: Go `Example*` test functions
+
+## 2026-03-01 — /release v0.11.0
+
+- **Commit**: `5622590`
+- **Outcome**: Released v0.11.0. Added 9 Go `Example*` test functions covering the full public API (Parse, Extract, Diff, Apply, MigrationVersion, DetectRedundantIndexes, BreakingChangeError, JSON round-trip). Closes the last STABILITY.md gap before 1.0.
+- **Notes**:
+  - C++ tests: 122, 368 assertions
+  - Go tests: 149 (was 140)
+  - 1.0 settling threshold: 5/4 — all gaps closed, project eligible for 1.0
