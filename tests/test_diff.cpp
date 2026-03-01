@@ -420,6 +420,114 @@ TEST_CASE("diff trigger dependency ordering - creates") {
     CHECK(log_pos != user_pos);
 }
 
+// --- Redundant index detection ---
+
+TEST_CASE("warn prefix-duplicate index") {
+    Schema s = parse(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT);"
+        "CREATE INDEX idx_name ON users(name);"
+        "CREATE INDEX idx_name_email ON users(name, email);");
+    auto plan = diff(Schema{}, s);
+    REQUIRE(plan.warnings().size() == 1);
+    CHECK(plan.warnings()[0].index_name == "idx_name");
+    CHECK(plan.warnings()[0].covered_by == "idx_name_email");
+    CHECK(plan.warnings()[0].table_name == "users");
+}
+
+TEST_CASE("warn PK-duplicate index") {
+    Schema s = parse(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);"
+        "CREATE INDEX idx_id ON users(id);");
+    auto plan = diff(Schema{}, s);
+    REQUIRE(plan.warnings().size() == 1);
+    CHECK(plan.warnings()[0].index_name == "idx_id");
+    CHECK(plan.warnings()[0].covered_by == "PRIMARY KEY");
+}
+
+TEST_CASE("no warning for UNIQUE prefix index") {
+    Schema s = parse(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT);"
+        "CREATE UNIQUE INDEX idx_name ON users(name);"
+        "CREATE INDEX idx_name_email ON users(name, email);");
+    auto plan = diff(Schema{}, s);
+    CHECK(plan.warnings().empty());
+}
+
+TEST_CASE("warn non-unique index covered by UNIQUE index") {
+    Schema s = parse(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT);"
+        "CREATE INDEX idx_name ON users(name);"
+        "CREATE UNIQUE INDEX idx_name_email ON users(name, email);");
+    auto plan = diff(Schema{}, s);
+    REQUIRE(plan.warnings().size() == 1);
+    CHECK(plan.warnings()[0].index_name == "idx_name");
+    CHECK(plan.warnings()[0].covered_by == "idx_name_email");
+}
+
+TEST_CASE("no warning for partial index as PK-duplicate") {
+    Schema s = parse(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, active INTEGER);"
+        "CREATE INDEX idx_id_active ON users(id) WHERE active = 1;");
+    auto plan = diff(Schema{}, s);
+    CHECK(plan.warnings().empty());
+}
+
+TEST_CASE("warn partial indexes with same WHERE as prefix-duplicate") {
+    Schema s = parse(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT, active INTEGER);"
+        "CREATE INDEX idx_a ON users(name) WHERE active = 1;"
+        "CREATE INDEX idx_b ON users(name, email) WHERE active = 1;");
+    auto plan = diff(Schema{}, s);
+    REQUIRE(plan.warnings().size() == 1);
+    CHECK(plan.warnings()[0].index_name == "idx_a");
+    CHECK(plan.warnings()[0].covered_by == "idx_b");
+}
+
+TEST_CASE("no warning for partial indexes with different WHERE") {
+    Schema s = parse(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, active INTEGER);"
+        "CREATE INDEX idx_a ON users(name) WHERE active = 1;"
+        "CREATE INDEX idx_b ON users(name) WHERE active = 0;");
+    auto plan = diff(Schema{}, s);
+    CHECK(plan.warnings().empty());
+}
+
+TEST_CASE("warn exact PK-duplicate UNIQUE index") {
+    Schema s = parse(
+        "CREATE TABLE t (a INTEGER, b INTEGER, PRIMARY KEY (a, b));"
+        "CREATE UNIQUE INDEX idx_pk ON t(a, b);");
+    auto plan = diff(Schema{}, s);
+    REQUIRE(plan.warnings().size() == 1);
+    CHECK(plan.warnings()[0].covered_by == "PRIMARY KEY");
+}
+
+TEST_CASE("no warning for UNIQUE strict prefix of PK") {
+    Schema s = parse(
+        "CREATE TABLE t (a INTEGER, b INTEGER, PRIMARY KEY (a, b));"
+        "CREATE UNIQUE INDEX idx_a ON t(a);");
+    auto plan = diff(Schema{}, s);
+    CHECK(plan.warnings().empty());
+}
+
+TEST_CASE("standalone detect_redundant_indexes matches diff warnings") {
+    Schema s = parse(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);"
+        "CREATE INDEX idx_id ON users(id);");
+    auto standalone = detect_redundant_indexes(s);
+    auto plan = diff(Schema{}, s);
+    REQUIRE(standalone.size() == plan.warnings().size());
+    CHECK(standalone[0].index_name == plan.warnings()[0].index_name);
+}
+
+TEST_CASE("no warnings when no redundant indexes") {
+    Schema s = parse(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT);"
+        "CREATE INDEX idx_name ON users(name);"
+        "CREATE INDEX idx_email ON users(email);");
+    auto plan = diff(Schema{}, s);
+    CHECK(plan.warnings().empty());
+}
+
 TEST_CASE("diff trigger dependency ordering - drops") {
     Schema current = parse(
         "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);"

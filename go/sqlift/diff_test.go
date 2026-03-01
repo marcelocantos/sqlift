@@ -530,6 +530,150 @@ func TestDiff(t *testing.T) {
 		}
 	})
 
+	// --- Redundant index detection ---
+
+	t.Run("warn prefix-duplicate index", func(t *testing.T) {
+		s := mustParse(t,
+			"CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT);"+
+				"CREATE INDEX idx_name ON users(name);"+
+				"CREATE INDEX idx_name_email ON users(name, email);")
+		plan := mustDiff(t, Schema{}, s)
+		if len(plan.Warnings()) != 1 {
+			t.Fatalf("expected 1 warning, got %d", len(plan.Warnings()))
+		}
+		if plan.Warnings()[0].IndexName != "idx_name" {
+			t.Errorf("expected IndexName 'idx_name', got %q", plan.Warnings()[0].IndexName)
+		}
+		if plan.Warnings()[0].CoveredBy != "idx_name_email" {
+			t.Errorf("expected CoveredBy 'idx_name_email', got %q", plan.Warnings()[0].CoveredBy)
+		}
+	})
+
+	t.Run("warn PK-duplicate index", func(t *testing.T) {
+		s := mustParse(t,
+			"CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);"+
+				"CREATE INDEX idx_id ON users(id);")
+		plan := mustDiff(t, Schema{}, s)
+		if len(plan.Warnings()) != 1 {
+			t.Fatalf("expected 1 warning, got %d", len(plan.Warnings()))
+		}
+		if plan.Warnings()[0].CoveredBy != "PRIMARY KEY" {
+			t.Errorf("expected CoveredBy 'PRIMARY KEY', got %q", plan.Warnings()[0].CoveredBy)
+		}
+	})
+
+	t.Run("no warning for UNIQUE prefix index", func(t *testing.T) {
+		s := mustParse(t,
+			"CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT);"+
+				"CREATE UNIQUE INDEX idx_name ON users(name);"+
+				"CREATE INDEX idx_name_email ON users(name, email);")
+		plan := mustDiff(t, Schema{}, s)
+		if len(plan.Warnings()) != 0 {
+			t.Errorf("expected 0 warnings, got %d", len(plan.Warnings()))
+		}
+	})
+
+	t.Run("warn non-unique index covered by UNIQUE index", func(t *testing.T) {
+		s := mustParse(t,
+			"CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT);"+
+				"CREATE INDEX idx_name ON users(name);"+
+				"CREATE UNIQUE INDEX idx_name_email ON users(name, email);")
+		plan := mustDiff(t, Schema{}, s)
+		if len(plan.Warnings()) != 1 {
+			t.Fatalf("expected 1 warning, got %d", len(plan.Warnings()))
+		}
+		if plan.Warnings()[0].IndexName != "idx_name" {
+			t.Errorf("expected IndexName 'idx_name', got %q", plan.Warnings()[0].IndexName)
+		}
+	})
+
+	t.Run("no warning for partial index as PK-duplicate", func(t *testing.T) {
+		s := mustParse(t,
+			"CREATE TABLE users (id INTEGER PRIMARY KEY, active INTEGER);"+
+				"CREATE INDEX idx_id_active ON users(id) WHERE active = 1;")
+		plan := mustDiff(t, Schema{}, s)
+		if len(plan.Warnings()) != 0 {
+			t.Errorf("expected 0 warnings, got %d", len(plan.Warnings()))
+		}
+	})
+
+	t.Run("warn partial indexes with same WHERE as prefix-duplicate", func(t *testing.T) {
+		s := mustParse(t,
+			"CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT, active INTEGER);"+
+				"CREATE INDEX idx_a ON users(name) WHERE active = 1;"+
+				"CREATE INDEX idx_b ON users(name, email) WHERE active = 1;")
+		plan := mustDiff(t, Schema{}, s)
+		if len(plan.Warnings()) != 1 {
+			t.Fatalf("expected 1 warning, got %d", len(plan.Warnings()))
+		}
+		if plan.Warnings()[0].IndexName != "idx_a" {
+			t.Errorf("expected IndexName 'idx_a', got %q", plan.Warnings()[0].IndexName)
+		}
+		if plan.Warnings()[0].CoveredBy != "idx_b" {
+			t.Errorf("expected CoveredBy 'idx_b', got %q", plan.Warnings()[0].CoveredBy)
+		}
+	})
+
+	t.Run("no warning for partial indexes with different WHERE", func(t *testing.T) {
+		s := mustParse(t,
+			"CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, active INTEGER);"+
+				"CREATE INDEX idx_a ON users(name) WHERE active = 1;"+
+				"CREATE INDEX idx_b ON users(name) WHERE active = 0;")
+		plan := mustDiff(t, Schema{}, s)
+		if len(plan.Warnings()) != 0 {
+			t.Errorf("expected 0 warnings, got %d", len(plan.Warnings()))
+		}
+	})
+
+	t.Run("warn exact PK-duplicate UNIQUE index", func(t *testing.T) {
+		s := mustParse(t,
+			"CREATE TABLE t (a INTEGER, b INTEGER, PRIMARY KEY (a, b));"+
+				"CREATE UNIQUE INDEX idx_pk ON t(a, b);")
+		plan := mustDiff(t, Schema{}, s)
+		if len(plan.Warnings()) != 1 {
+			t.Fatalf("expected 1 warning, got %d", len(plan.Warnings()))
+		}
+		if plan.Warnings()[0].CoveredBy != "PRIMARY KEY" {
+			t.Errorf("expected CoveredBy 'PRIMARY KEY', got %q", plan.Warnings()[0].CoveredBy)
+		}
+	})
+
+	t.Run("no warning for UNIQUE strict prefix of PK", func(t *testing.T) {
+		s := mustParse(t,
+			"CREATE TABLE t (a INTEGER, b INTEGER, PRIMARY KEY (a, b));"+
+				"CREATE UNIQUE INDEX idx_a ON t(a);")
+		plan := mustDiff(t, Schema{}, s)
+		if len(plan.Warnings()) != 0 {
+			t.Errorf("expected 0 warnings, got %d", len(plan.Warnings()))
+		}
+	})
+
+	t.Run("no warnings when no redundant indexes", func(t *testing.T) {
+		s := mustParse(t,
+			"CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT);"+
+				"CREATE INDEX idx_name ON users(name);"+
+				"CREATE INDEX idx_email ON users(email);")
+		plan := mustDiff(t, Schema{}, s)
+		if len(plan.Warnings()) != 0 {
+			t.Errorf("expected 0 warnings, got %d", len(plan.Warnings()))
+		}
+	})
+
+	t.Run("standalone DetectRedundantIndexes matches diff warnings", func(t *testing.T) {
+		s := mustParse(t,
+			"CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);"+
+				"CREATE INDEX idx_id ON users(id);")
+		standalone := DetectRedundantIndexes(s)
+		plan := mustDiff(t, Schema{}, s)
+		if len(standalone) != len(plan.Warnings()) {
+			t.Fatalf("standalone returned %d, diff returned %d", len(standalone), len(plan.Warnings()))
+		}
+		if standalone[0].IndexName != plan.Warnings()[0].IndexName {
+			t.Errorf("standalone IndexName %q != diff IndexName %q",
+				standalone[0].IndexName, plan.Warnings()[0].IndexName)
+		}
+	})
+
 	t.Run("diff trigger dependency ordering - drops", func(t *testing.T) {
 		current := mustParse(t,
 			"CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);"+

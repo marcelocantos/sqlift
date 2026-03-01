@@ -7,4 +7,4 @@
 
 ## Features
 
-- [ ] Redundant index detection — warn when desired schema has prefix-duplicate or PK-duplicate indexes
+- [x] Redundant index detection — warn when desired schema has prefix-duplicate or PK-duplicate indexes
