@@ -20,9 +20,9 @@ Snapshot as of v0.8.0.
 #### Version macros
 
 ```cpp
-#define SQLIFT_VERSION       "0.7.0"
+#define SQLIFT_VERSION       "0.8.0"
 #define SQLIFT_VERSION_MAJOR 0
-#define SQLIFT_VERSION_MINOR 7
+#define SQLIFT_VERSION_MINOR 8
 #define SQLIFT_VERSION_PATCH 0
 ```
 
