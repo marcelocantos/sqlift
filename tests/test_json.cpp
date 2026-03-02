@@ -183,6 +183,85 @@ TEST_CASE("from_json: missing warnings field is ok") {
     CHECK(plan.warnings().empty());
 }
 
+// --- Schema JSON tests ---
+
+TEST_CASE("schema json round-trip: complex schema") {
+    Schema s = parse(
+        "CREATE TABLE users ("
+        "  id INTEGER PRIMARY KEY,"
+        "  name TEXT NOT NULL,"
+        "  email TEXT COLLATE NOCASE,"
+        "  age INTEGER CHECK(age > 0),"
+        "  CONSTRAINT fk_self FOREIGN KEY (id) REFERENCES users(id) ON DELETE CASCADE"
+        ");"
+        "CREATE TABLE posts ("
+        "  id INTEGER PRIMARY KEY,"
+        "  user_id INTEGER NOT NULL REFERENCES users(id),"
+        "  title TEXT NOT NULL DEFAULT '',"
+        "  body TEXT"
+        ");"
+        "CREATE INDEX idx_posts_user ON posts(user_id);"
+        "CREATE UNIQUE INDEX idx_users_email ON users(email);"
+        "CREATE VIEW active_users AS SELECT id, name FROM users WHERE age > 18;"
+        "CREATE TRIGGER trg_posts_delete AFTER DELETE ON posts BEGIN SELECT 1; END;");
+
+    std::string json = schema_to_json(s);
+    Schema restored = schema_from_json(json);
+
+    // Structural equality
+    CHECK(restored == s);
+
+    // Verify hash matches
+    CHECK(restored.hash() == s.hash());
+
+    // Verify cosmetic fields survive
+    CHECK(restored.tables.at("users").raw_sql == s.tables.at("users").raw_sql);
+    CHECK(restored.tables.at("users").pk_constraint_name == s.tables.at("users").pk_constraint_name);
+    CHECK(restored.tables.at("users").foreign_keys[0].constraint_name ==
+          s.tables.at("users").foreign_keys[0].constraint_name);
+    CHECK(restored.indexes.at("idx_posts_user").raw_sql ==
+          s.indexes.at("idx_posts_user").raw_sql);
+}
+
+TEST_CASE("schema json round-trip: empty schema") {
+    Schema s;
+    std::string json = schema_to_json(s);
+    Schema restored = schema_from_json(json);
+    CHECK(restored == s);
+}
+
+TEST_CASE("schema json round-trip: WITHOUT ROWID and STRICT") {
+    Schema s = parse(
+        "CREATE TABLE kv (k TEXT PRIMARY KEY, v TEXT) WITHOUT ROWID;"
+        "CREATE TABLE strict_t (id INTEGER PRIMARY KEY, x TEXT) STRICT;");
+
+    std::string json = schema_to_json(s);
+    Schema restored = schema_from_json(json);
+    CHECK(restored == s);
+    CHECK(restored.tables.at("kv").without_rowid);
+    CHECK(restored.tables.at("strict_t").strict);
+}
+
+TEST_CASE("schema json round-trip: generated columns") {
+    Schema s = parse(
+        "CREATE TABLE t ("
+        "  first TEXT,"
+        "  last TEXT,"
+        "  full_name TEXT GENERATED ALWAYS AS (first || ' ' || last) STORED"
+        ");");
+
+    std::string json = schema_to_json(s);
+    Schema restored = schema_from_json(json);
+    CHECK(restored == s);
+    CHECK(restored.tables.at("t").columns[2].generated == GeneratedType::Stored);
+    CHECK(restored.tables.at("t").columns[2].generated_expr == "first || ' ' || last");
+}
+
+TEST_CASE("schema_from_json rejects invalid JSON") {
+    CHECK_THROWS_AS(schema_from_json("not json"), JsonError);
+    CHECK_THROWS_AS(schema_from_json("[1,2,3]"), JsonError);
+}
+
 TEST_CASE("from_json rejects tampered plan with mismatched type and sql") {
     // A CreateTable operation should start with "CREATE TABLE", not "DROP TABLE"
     auto tampered_create =

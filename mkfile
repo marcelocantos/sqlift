@@ -16,10 +16,13 @@ san_cxxflags = -std=c++23 -Wall -Wextra -Wpedantic -g -O1 -fsanitize=address,und
 san_obj = $[patsubst tests/%.cpp,build/sanitize/test/%.o,$test_src]
 san_bin = build/sanitize/test_sqlift
 
-$lib: build/sqlift.o
+$lib: build/sqlift.o build/sqlift_c.o
     ar rcs $target $inputs
 
 build/sqlift.o: dist/sqlift.cpp dist/sqlift.h
+    $cxx $cxxflags $cppflags -c $input -o $target
+
+build/sqlift_c.o: dist/sqlift_c.cpp dist/sqlift_c.h dist/sqlift.h
     $cxx $cxxflags $cppflags -c $input -o $target
 
 build/test/{name}.o: tests/{name}.cpp dist/sqlift.h
@@ -36,10 +39,13 @@ $test_bin: $test_obj $lib
 build/sanitize/sqlift.o: dist/sqlift.cpp dist/sqlift.h
     $cxx $san_cxxflags $cppflags -c $input -o $target
 
+build/sanitize/sqlift_c.o: dist/sqlift_c.cpp dist/sqlift_c.h dist/sqlift.h
+    $cxx $san_cxxflags $cppflags -c $input -o $target
+
 build/sanitize/test/{name}.o: tests/{name}.cpp dist/sqlift.h
     $cxx $san_cxxflags $cppflags -c $input -o $target
 
-build/sanitize/libsqlift.a: build/sanitize/sqlift.o
+build/sanitize/libsqlift.a: build/sanitize/sqlift.o build/sanitize/sqlift_c.o
     ar rcs $target $inputs
 
 $san_bin: $san_obj build/sanitize/libsqlift.a
@@ -50,11 +56,11 @@ $san_bin: $san_obj build/sanitize/libsqlift.a
 
 !install: $lib
     mkdir -p $prefix/include $prefix/lib
-    cp dist/sqlift.h $prefix/include/
+    cp dist/sqlift.h dist/sqlift_c.h $prefix/include/
     cp $lib $prefix/lib/
 
 !uninstall:
-    rm -f $prefix/include/sqlift.h $prefix/lib/libsqlift.a
+    rm -f $prefix/include/sqlift.h $prefix/include/sqlift_c.h $prefix/lib/libsqlift.a
 
 !clean:
     rm -rf build/ .mk/

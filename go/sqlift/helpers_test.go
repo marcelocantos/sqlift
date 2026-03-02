@@ -4,21 +4,16 @@
 package sqlift
 
 import (
-	"context"
-	"database/sql"
 	"testing"
-
-	_ "github.com/mattn/go-sqlite3"
 )
 
-// openMemory opens a fresh :memory: SQLite database with MaxOpenConns(1).
-func openMemory(t *testing.T) *sql.DB {
+// openMemory opens a fresh :memory: SQLite database.
+func openMemory(t *testing.T) *Database {
 	t.Helper()
-	db, err := sql.Open("sqlite3", ":memory:")
+	db, err := Open(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
-	db.SetMaxOpenConns(1)
 	t.Cleanup(func() { db.Close() })
 	return db
 }
@@ -34,18 +29,17 @@ func mustParse(t *testing.T, ddl string) Schema {
 }
 
 // mustExec executes SQL on the database, failing the test on error.
-func mustExec(t *testing.T, db *sql.DB, sql string) {
+func mustExec(t *testing.T, db *Database, sql string) {
 	t.Helper()
-	_, err := db.ExecContext(context.Background(), sql)
-	if err != nil {
+	if err := db.Exec(sql); err != nil {
 		t.Fatalf("Exec failed: %v", err)
 	}
 }
 
 // mustExtract calls Extract and fails the test on error.
-func mustExtract(t *testing.T, db *sql.DB) Schema {
+func mustExtract(t *testing.T, db *Database) Schema {
 	t.Helper()
-	s, err := Extract(context.Background(), db)
+	s, err := Extract(db)
 	if err != nil {
 		t.Fatalf("Extract failed: %v", err)
 	}
@@ -63,13 +57,13 @@ func mustDiff(t *testing.T, current, desired Schema) MigrationPlan {
 }
 
 // mustApply calls Apply and fails the test on error.
-func mustApply(t *testing.T, db *sql.DB, plan MigrationPlan, opts ...ApplyOptions) {
+func mustApply(t *testing.T, db *Database, plan MigrationPlan, opts ...ApplyOptions) {
 	t.Helper()
 	opt := ApplyOptions{}
 	if len(opts) > 0 {
 		opt = opts[0]
 	}
-	if err := Apply(context.Background(), db, plan, opt); err != nil {
+	if err := Apply(db, plan, opt); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
 }

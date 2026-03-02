@@ -115,11 +115,12 @@ desired, err := sqlift.Parse(`
     CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
 `)
 // handle err
-db, _ := sql.Open("sqlite3", "app.db")
-current, err := sqlift.Extract(ctx, db)
+db, _ := sqlift.Open("app.db")
+defer db.Close()
+current, err := sqlift.Extract(db)
 plan, err := sqlift.Diff(current, desired)
 if !plan.Empty() {
-    err = sqlift.Apply(ctx, db, plan, sqlift.ApplyOptions{})
+    err = sqlift.Apply(db, plan, sqlift.ApplyOptions{})
 }
 ```
 
@@ -234,10 +235,10 @@ sqlift::apply(db, plan, {.allow_destructive = true});
 
 ```go
 // This returns a *DestructiveError if the plan drops anything
-err := sqlift.Apply(ctx, db, plan, sqlift.ApplyOptions{})
+err := sqlift.Apply(db, plan, sqlift.ApplyOptions{})
 
 // Opt in to destructive operations
-err = sqlift.Apply(ctx, db, plan, sqlift.ApplyOptions{AllowDestructive: true})
+err = sqlift.Apply(db, plan, sqlift.ApplyOptions{AllowDestructive: true})
 ```
 
 ## Breaking change detection
@@ -366,7 +367,7 @@ try {
 **Go:**
 
 ```go
-err := sqlift.Apply(ctx, db, plan, sqlift.ApplyOptions{})
+err := sqlift.Apply(db, plan, sqlift.ApplyOptions{})
 var driftErr *sqlift.DriftError
 if errors.As(err, &driftErr) {
     log.Println("Schema was modified outside of sqlift:", driftErr.Msg)
@@ -528,7 +529,7 @@ sqlift::apply(db, restored);
 data, err := sqlift.ToJSON(plan)
 
 restored, err := sqlift.FromJSON(data)
-err = sqlift.Apply(ctx, db, restored, sqlift.ApplyOptions{})
+err = sqlift.Apply(db, restored, sqlift.ApplyOptions{})
 ```
 
 ## Cross-language compatibility
@@ -597,7 +598,8 @@ Each error type has a `Msg` field with a descriptive message.
 ## Utility classes (C++ only)
 
 sqlift includes lightweight RAII wrappers for `sqlite3*` and `sqlite3_stmt*`.
-The Go implementation uses the standard `database/sql` package instead.
+The Go implementation wraps the C++ library via an `extern "C"` interface,
+providing its own `Database` type.
 
 ```cpp
 // Database opens on construction, closes on destruction

@@ -6,7 +6,9 @@ Package `sqlift` provides declarative SQLite schema migration for Go.
 import "github.com/marcelocantos/sqlift/go/sqlift"
 ```
 
-Requires CGo ([mattn/go-sqlite3](https://github.com/mattn/go-sqlite3)).
+Requires CGo. The Go library wraps the C++ implementation via an
+`extern "C"` interface; the `*Database` type manages the SQLite connection
+directly through the C++ layer (no `database/sql` or third-party driver).
 
 For the C++ API, see [C++ API Reference](reference.md). For conceptual
 background, see [Guide](guide.md).
@@ -51,7 +53,7 @@ if err != nil {
 ### `Extract`
 
 ```go
-func Extract(ctx context.Context, db *sql.DB) (Schema, error)
+func Extract(db *Database) (Schema, error)
 ```
 
 Extract the current schema from a live SQLite database by querying
@@ -59,12 +61,8 @@ Extract the current schema from a live SQLite database by querying
 `index_list`, `index_info`). The `_sqlift_state` table and
 `sqlite_autoindex_*` entries are excluded.
 
-A single `*sql.Conn` is acquired for the duration of the call so that all
-PRAGMA queries execute on the same connection and results are coherent.
-
 **Parameters:**
-- `ctx` -- context for cancellation and deadline propagation.
-- `db` -- an open `*sql.DB` connected to a SQLite database.
+- `db` -- an open `*Database` handle (from `Open`).
 
 **Returns:** a `Schema` representing the current database objects.
 
@@ -73,8 +71,9 @@ PRAGMA queries execute on the same connection and results are coherent.
 **Example:**
 
 ```go
-db, _ := sql.Open("sqlite3", "app.db")
-schema, err := sqlift.Extract(context.Background(), db)
+db, _ := sqlift.Open("app.db")
+defer db.Close()
+schema, err := sqlift.Extract(db)
 if err != nil {
     log.Fatal(err)
 }
@@ -125,7 +124,7 @@ reported via `plan.Warnings()`.
 **Example:**
 
 ```go
-current, _ := sqlift.Extract(ctx, db)
+current, _ := sqlift.Extract(db)
 desired, _ := sqlift.Parse(ddl)
 plan, err := sqlift.Diff(current, desired)
 if err != nil {
@@ -161,15 +160,11 @@ available as a standalone function for direct schema analysis.
 ### `Apply`
 
 ```go
-func Apply(ctx context.Context, db *sql.DB, plan MigrationPlan, opts ApplyOptions) error
+func Apply(db *Database, plan MigrationPlan, opts ApplyOptions) error
 ```
 
 Execute a migration plan against a live database. If the plan is empty,
 `Apply` returns `nil` immediately without touching the database.
-
-A single `*sql.Conn` is acquired for the entire operation to ensure
-PRAGMA coherence (savepoints, `foreign_keys` state, and schema hash reads
-all share the same connection).
 
 **Behaviour:**
 
@@ -189,8 +184,7 @@ all share the same connection).
    `_sqlift_state`, and increment the migration version counter.
 
 **Parameters:**
-- `ctx` -- context for cancellation and deadline propagation.
-- `db` -- an open `*sql.DB` connected to the target SQLite database.
+- `db` -- an open `*Database` handle (from `Open`).
 - `plan` -- the plan to execute (from `Diff`).
 - `opts` -- options controlling behaviour (see `ApplyOptions`).
 
@@ -204,7 +198,7 @@ all share the same connection).
 **Example:**
 
 ```go
-err := sqlift.Apply(ctx, db, plan, sqlift.ApplyOptions{AllowDestructive: false})
+err := sqlift.Apply(db, plan, sqlift.ApplyOptions{AllowDestructive: false})
 if err != nil {
     var de *sqlift.DestructiveError
     if errors.As(err, &de) {
@@ -219,7 +213,7 @@ if err != nil {
 ### `MigrationVersion`
 
 ```go
-func MigrationVersion(ctx context.Context, db *sql.DB) (int64, error)
+func MigrationVersion(db *Database) (int64, error)
 ```
 
 Return the current migration version stored in `_sqlift_state`. The counter
@@ -227,8 +221,7 @@ starts at 0 (no migrations have been applied) and increments by 1 each time
 `Apply` executes a non-empty plan.
 
 **Parameters:**
-- `ctx` -- context for cancellation and deadline propagation.
-- `db` -- an open `*sql.DB` connected to the target SQLite database.
+- `db` -- an open `*Database` handle (from `Open`).
 
 **Returns:** the current migration version, or `0` if the `_sqlift_state`
 table does not exist or the key is absent.
@@ -238,7 +231,7 @@ table does not exist or the key is absent.
 **Example:**
 
 ```go
-v, err := sqlift.MigrationVersion(ctx, db)
+v, err := sqlift.MigrationVersion(db)
 if err != nil {
     log.Fatal(err)
 }
@@ -662,7 +655,7 @@ if err != nil {
     log.Fatal(err)
 }
 
-applyErr := sqlift.Apply(ctx, db, plan, sqlift.ApplyOptions{})
+applyErr := sqlift.Apply(db, plan, sqlift.ApplyOptions{})
 if applyErr != nil {
     var drift *sqlift.DriftError
     var destr *sqlift.DestructiveError

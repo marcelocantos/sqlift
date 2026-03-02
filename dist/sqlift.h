@@ -338,5 +338,11 @@ std::string to_json(const MigrationPlan& plan);
 // Deserialize a MigrationPlan from a JSON string. Throws JsonError on failure.
 MigrationPlan from_json(const std::string& json_str);
 
+// Serialize a Schema to a JSON string (includes all fields, even cosmetic ones).
+std::string schema_to_json(const Schema& schema);
+
+// Deserialize a Schema from a JSON string. Throws JsonError on failure.
+Schema schema_from_json(const std::string& json_str);
+
 
 } // namespace sqlift

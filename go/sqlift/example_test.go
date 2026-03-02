@@ -4,22 +4,17 @@
 package sqlift
 
 import (
-	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"log"
 	"sort"
-
-	_ "github.com/mattn/go-sqlite3"
 )
 
-func openDB() *sql.DB {
-	db, err := sql.Open("sqlite3", ":memory:")
+func openDB() *Database {
+	db, err := Open(":memory:")
 	if err != nil {
 		log.Fatal(err)
 	}
-	db.SetMaxOpenConns(1)
 	return db
 }
 
@@ -58,7 +53,7 @@ func ExampleExtract() {
 	db := openDB()
 	defer db.Close()
 
-	_, err := db.Exec(`
+	err := db.Exec(`
 		CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
 		CREATE INDEX idx_users_name ON users (name);
 	`)
@@ -66,7 +61,7 @@ func ExampleExtract() {
 		log.Fatal(err)
 	}
 
-	schema, err := Extract(context.Background(), db)
+	schema, err := Extract(db)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -110,12 +105,12 @@ func ExampleApply() {
 	defer db.Close()
 
 	// Set up initial schema.
-	_, err := db.Exec("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);")
+	err := db.Exec("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);")
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	current, err := Extract(context.Background(), db)
+	current, err := Extract(db)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -132,13 +127,13 @@ func ExampleApply() {
 		log.Fatal(err)
 	}
 
-	err = Apply(context.Background(), db, plan, ApplyOptions{})
+	err = Apply(db, plan, ApplyOptions{})
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	// Verify the column was added.
-	after, err := Extract(context.Background(), db)
+	after, err := Extract(db)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -151,12 +146,12 @@ func ExampleApply_destructive() {
 	db := openDB()
 	defer db.Close()
 
-	_, err := db.Exec("CREATE TABLE old_table (id INTEGER PRIMARY KEY);")
+	err := db.Exec("CREATE TABLE old_table (id INTEGER PRIMARY KEY);")
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	current, err := Extract(context.Background(), db)
+	current, err := Extract(db)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -170,17 +165,17 @@ func ExampleApply_destructive() {
 	fmt.Printf("destructive: %v\n", plan.HasDestructiveOperations())
 
 	// Without AllowDestructive, Apply rejects the plan.
-	err = Apply(context.Background(), db, plan, ApplyOptions{})
+	err = Apply(db, plan, ApplyOptions{})
 	var de *DestructiveError
 	fmt.Printf("blocked: %v\n", errors.As(err, &de))
 
 	// With AllowDestructive, it proceeds.
-	err = Apply(context.Background(), db, plan, ApplyOptions{AllowDestructive: true})
+	err = Apply(db, plan, ApplyOptions{AllowDestructive: true})
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	after, err := Extract(context.Background(), db)
+	after, err := Extract(db)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -195,12 +190,12 @@ func ExampleMigrationVersion() {
 	db := openDB()
 	defer db.Close()
 
-	_, err := db.Exec("CREATE TABLE users (id INTEGER PRIMARY KEY);")
+	err := db.Exec("CREATE TABLE users (id INTEGER PRIMARY KEY);")
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	current, err := Extract(context.Background(), db)
+	current, err := Extract(db)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -217,12 +212,12 @@ func ExampleMigrationVersion() {
 		log.Fatal(err)
 	}
 
-	err = Apply(context.Background(), db, plan, ApplyOptions{})
+	err = Apply(db, plan, ApplyOptions{})
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	ver, err := MigrationVersion(context.Background(), db)
+	ver, err := MigrationVersion(db)
 	if err != nil {
 		log.Fatal(err)
 	}

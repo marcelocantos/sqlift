@@ -1877,4 +1877,206 @@ MigrationPlan from_json(const std::string& json_str) {
 }
 
 
+// --- schema_json.cpp ---
+
+
+
+
+std::string schema_to_json(const Schema& schema) {
+    nlohmann::json j;
+
+    // Tables
+    auto& jt = j["tables"];
+    jt = nlohmann::json::object();
+    for (const auto& [name, table] : schema.tables) {
+        nlohmann::json jtbl;
+        jtbl["name"] = table.name;
+
+        auto& jcols = jtbl["columns"];
+        jcols = nlohmann::json::array();
+        for (const auto& col : table.columns) {
+            nlohmann::json jcol;
+            jcol["name"] = col.name;
+            jcol["type"] = col.type;
+            jcol["notnull"] = col.notnull;
+            jcol["default_value"] = col.default_value;
+            jcol["pk"] = col.pk;
+            jcol["collation"] = col.collation;
+            jcol["generated"] = static_cast<int>(col.generated);
+            jcol["generated_expr"] = col.generated_expr;
+            jcols.push_back(std::move(jcol));
+        }
+
+        auto& jfks = jtbl["foreign_keys"];
+        jfks = nlohmann::json::array();
+        for (const auto& fk : table.foreign_keys) {
+            nlohmann::json jfk;
+            jfk["constraint_name"] = fk.constraint_name;
+            jfk["from_columns"] = fk.from_columns;
+            jfk["to_table"] = fk.to_table;
+            jfk["to_columns"] = fk.to_columns;
+            jfk["on_update"] = fk.on_update;
+            jfk["on_delete"] = fk.on_delete;
+            jfks.push_back(std::move(jfk));
+        }
+
+        auto& jchks = jtbl["check_constraints"];
+        jchks = nlohmann::json::array();
+        for (const auto& chk : table.check_constraints) {
+            nlohmann::json jchk;
+            jchk["name"] = chk.name;
+            jchk["expression"] = chk.expression;
+            jchks.push_back(std::move(jchk));
+        }
+
+        jtbl["pk_constraint_name"] = table.pk_constraint_name;
+        jtbl["without_rowid"] = table.without_rowid;
+        jtbl["strict"] = table.strict;
+        jtbl["raw_sql"] = table.raw_sql;
+
+        jt[name] = std::move(jtbl);
+    }
+
+    // Indexes
+    auto& ji = j["indexes"];
+    ji = nlohmann::json::object();
+    for (const auto& [name, idx] : schema.indexes) {
+        nlohmann::json jidx;
+        jidx["name"] = idx.name;
+        jidx["table_name"] = idx.table_name;
+        jidx["columns"] = idx.columns;
+        jidx["unique"] = idx.unique;
+        jidx["where_clause"] = idx.where_clause;
+        jidx["raw_sql"] = idx.raw_sql;
+        ji[name] = std::move(jidx);
+    }
+
+    // Views
+    auto& jv = j["views"];
+    jv = nlohmann::json::object();
+    for (const auto& [name, view] : schema.views) {
+        nlohmann::json jview;
+        jview["name"] = view.name;
+        jview["sql"] = view.sql;
+        jv[name] = std::move(jview);
+    }
+
+    // Triggers
+    auto& jtr = j["triggers"];
+    jtr = nlohmann::json::object();
+    for (const auto& [name, trig] : schema.triggers) {
+        nlohmann::json jtrig;
+        jtrig["name"] = trig.name;
+        jtrig["table_name"] = trig.table_name;
+        jtrig["sql"] = trig.sql;
+        jtr[name] = std::move(jtrig);
+    }
+
+    return j.dump(2);
+}
+
+Schema schema_from_json(const std::string& json_str) {
+    nlohmann::json j;
+    try {
+        j = nlohmann::json::parse(json_str);
+    } catch (const nlohmann::json::parse_error& e) {
+        throw JsonError(std::string("Invalid JSON: ") + e.what());
+    }
+
+    if (!j.is_object())
+        throw JsonError("Expected top-level JSON object");
+
+    Schema schema;
+
+    // Tables
+    if (j.contains("tables") && j["tables"].is_object()) {
+        for (const auto& [name, jtbl] : j["tables"].items()) {
+            Table table;
+            table.name = jtbl.value("name", "");
+
+            if (jtbl.contains("columns") && jtbl["columns"].is_array()) {
+                for (const auto& jcol : jtbl["columns"]) {
+                    Column col;
+                    col.name = jcol.value("name", "");
+                    col.type = jcol.value("type", "");
+                    col.notnull = jcol.value("notnull", false);
+                    col.default_value = jcol.value("default_value", "");
+                    col.pk = jcol.value("pk", 0);
+                    col.collation = jcol.value("collation", "");
+                    col.generated = static_cast<GeneratedType>(jcol.value("generated", 0));
+                    col.generated_expr = jcol.value("generated_expr", "");
+                    table.columns.push_back(std::move(col));
+                }
+            }
+
+            if (jtbl.contains("foreign_keys") && jtbl["foreign_keys"].is_array()) {
+                for (const auto& jfk : jtbl["foreign_keys"]) {
+                    ForeignKey fk;
+                    fk.constraint_name = jfk.value("constraint_name", "");
+                    fk.from_columns = jfk.value("from_columns", std::vector<std::string>{});
+                    fk.to_table = jfk.value("to_table", "");
+                    fk.to_columns = jfk.value("to_columns", std::vector<std::string>{});
+                    fk.on_update = jfk.value("on_update", "NO ACTION");
+                    fk.on_delete = jfk.value("on_delete", "NO ACTION");
+                    table.foreign_keys.push_back(std::move(fk));
+                }
+            }
+
+            if (jtbl.contains("check_constraints") && jtbl["check_constraints"].is_array()) {
+                for (const auto& jchk : jtbl["check_constraints"]) {
+                    CheckConstraint chk;
+                    chk.name = jchk.value("name", "");
+                    chk.expression = jchk.value("expression", "");
+                    table.check_constraints.push_back(std::move(chk));
+                }
+            }
+
+            table.pk_constraint_name = jtbl.value("pk_constraint_name", "");
+            table.without_rowid = jtbl.value("without_rowid", false);
+            table.strict = jtbl.value("strict", false);
+            table.raw_sql = jtbl.value("raw_sql", "");
+
+            schema.tables[name] = std::move(table);
+        }
+    }
+
+    // Indexes
+    if (j.contains("indexes") && j["indexes"].is_object()) {
+        for (const auto& [name, jidx] : j["indexes"].items()) {
+            Index idx;
+            idx.name = jidx.value("name", "");
+            idx.table_name = jidx.value("table_name", "");
+            idx.columns = jidx.value("columns", std::vector<std::string>{});
+            idx.unique = jidx.value("unique", false);
+            idx.where_clause = jidx.value("where_clause", "");
+            idx.raw_sql = jidx.value("raw_sql", "");
+            schema.indexes[name] = std::move(idx);
+        }
+    }
+
+    // Views
+    if (j.contains("views") && j["views"].is_object()) {
+        for (const auto& [name, jview] : j["views"].items()) {
+            View view;
+            view.name = jview.value("name", "");
+            view.sql = jview.value("sql", "");
+            schema.views[name] = std::move(view);
+        }
+    }
+
+    // Triggers
+    if (j.contains("triggers") && j["triggers"].is_object()) {
+        for (const auto& [name, jtrig] : j["triggers"].items()) {
+            Trigger trig;
+            trig.name = jtrig.value("name", "");
+            trig.table_name = jtrig.value("table_name", "");
+            trig.sql = jtrig.value("sql", "");
+            schema.triggers[name] = std::move(trig);
+        }
+    }
+
+    return schema;
+}
+
+
 } // namespace sqlift

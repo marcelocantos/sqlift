@@ -4,15 +4,12 @@
 package sqlift
 
 import (
-	"context"
 	"errors"
 	"strings"
 	"testing"
 )
 
 func TestApply(t *testing.T) {
-	ctx := context.Background()
-
 	t.Run("apply create table", func(t *testing.T) {
 		db := openMemory(t)
 		empty := mustExtract(t, db)
@@ -52,8 +49,7 @@ func TestApply(t *testing.T) {
 			t.Errorf("expected 3 columns, got %d", len(tbl.Columns))
 		}
 
-		var name string
-		err := db.QueryRowContext(ctx, "SELECT name FROM users WHERE id=1").Scan(&name)
+		name, err := db.QueryText("SELECT name FROM users WHERE id=1")
 		if err != nil {
 			t.Fatalf("failed to query users: %v", err)
 		}
@@ -86,8 +82,7 @@ func TestApply(t *testing.T) {
 			t.Errorf("expected age column type 'INTEGER', got %q", tbl.Columns[1].Type)
 		}
 
-		var age int
-		err := db.QueryRowContext(ctx, "SELECT age FROM users WHERE id=1").Scan(&age)
+		age, err := db.QueryInt64("SELECT age FROM users WHERE id=1")
 		if err != nil {
 			t.Fatalf("failed to query users: %v", err)
 		}
@@ -105,7 +100,7 @@ func TestApply(t *testing.T) {
 		desired := mustParse(t, "") // empty schema — drops users
 		plan := mustDiff(t, current, desired)
 
-		err := Apply(ctx, db, plan, ApplyOptions{AllowDestructive: false})
+		err := Apply(db, plan, ApplyOptions{AllowDestructive: false})
 		if err == nil {
 			t.Fatal("expected DestructiveError, got nil")
 		}
@@ -139,9 +134,8 @@ func TestApply(t *testing.T) {
 		plan := mustDiff(t, empty, desired)
 		mustApply(t, db, plan)
 
-		var hash string
-		err := db.QueryRowContext(ctx,
-			"SELECT value FROM _sqlift_state WHERE key='schema_hash'").Scan(&hash)
+		hash, err := db.QueryText(
+			"SELECT value FROM _sqlift_state WHERE key='schema_hash'")
 		if err != nil {
 			t.Fatalf("failed to read schema_hash: %v", err)
 		}
@@ -168,7 +162,7 @@ func TestApply(t *testing.T) {
 				"CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id BIGINT REFERENCES users(id));")
 		plan := mustDiff(t, current, desired)
 
-		err := Apply(ctx, db, plan, ApplyOptions{})
+		err := Apply(db, plan, ApplyOptions{})
 		if err == nil {
 			t.Fatal("expected ApplyError for FK violation, got nil")
 		}
@@ -207,11 +201,10 @@ func TestApply(t *testing.T) {
 		plan := mustDiff(t, current, desired)
 
 		// This should fail due to the orphan FK.
-		_ = Apply(ctx, db, plan, ApplyOptions{})
+		_ = Apply(db, plan, ApplyOptions{})
 
 		// Row count should be preserved.
-		var count int
-		err := db.QueryRowContext(ctx, "SELECT count(*) FROM orders").Scan(&count)
+		count, err := db.QueryInt64("SELECT count(*) FROM orders")
 		if err != nil {
 			t.Fatalf("failed to query orders: %v", err)
 		}
@@ -220,17 +213,17 @@ func TestApply(t *testing.T) {
 		}
 
 		// No temp table should remain.
-		var tempName string
-		err = db.QueryRowContext(ctx,
-			"SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%sqlift_new%'").
-			Scan(&tempName)
-		if err == nil {
-			t.Errorf("unexpected temp table found: %q", tempName)
+		tempCount, err := db.QueryInt64(
+			"SELECT count(*) FROM sqlite_master WHERE type='table' AND name LIKE '%sqlift_new%'")
+		if err != nil {
+			t.Fatalf("failed to query temp tables: %v", err)
+		}
+		if tempCount != 0 {
+			t.Errorf("expected 0 temp tables, got %d", tempCount)
 		}
 
 		// FK enforcement should be ON.
-		var fkVal int
-		err = db.QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&fkVal)
+		fkVal, err := db.QueryInt64("PRAGMA foreign_keys")
 		if err != nil {
 			t.Fatalf("failed to query PRAGMA foreign_keys: %v", err)
 		}
@@ -252,8 +245,7 @@ func TestApply(t *testing.T) {
 		plan := mustDiff(t, current, desired)
 		mustApply(t, db, plan)
 
-		var fkVal int
-		err := db.QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&fkVal)
+		fkVal, err := db.QueryInt64("PRAGMA foreign_keys")
 		if err != nil {
 			t.Fatalf("failed to query PRAGMA foreign_keys: %v", err)
 		}
@@ -308,8 +300,7 @@ func TestApply(t *testing.T) {
 		mustApply(t, db, plan)
 
 		// Verify data preserved.
-		var xVal int
-		err := db.QueryRowContext(ctx, "SELECT x FROM a WHERE id=1").Scan(&xVal)
+		xVal, err := db.QueryInt64("SELECT x FROM a WHERE id=1")
 		if err != nil {
 			t.Fatalf("failed to query a: %v", err)
 		}
@@ -317,8 +308,7 @@ func TestApply(t *testing.T) {
 			t.Errorf("expected x=42, got %d", xVal)
 		}
 
-		var yVal int
-		err = db.QueryRowContext(ctx, "SELECT y FROM b WHERE id=1").Scan(&yVal)
+		yVal, err := db.QueryInt64("SELECT y FROM b WHERE id=1")
 		if err != nil {
 			t.Fatalf("failed to query b: %v", err)
 		}
@@ -327,8 +317,7 @@ func TestApply(t *testing.T) {
 		}
 
 		// FK enforcement should be ON.
-		var fkVal int
-		err = db.QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&fkVal)
+		fkVal, err := db.QueryInt64("PRAGMA foreign_keys")
 		if err != nil {
 			t.Fatalf("failed to query PRAGMA foreign_keys: %v", err)
 		}
@@ -339,7 +328,7 @@ func TestApply(t *testing.T) {
 
 	t.Run("migration_version starts at 0", func(t *testing.T) {
 		db := openMemory(t)
-		v, err := MigrationVersion(ctx, db)
+		v, err := MigrationVersion(db)
 		if err != nil {
 			t.Fatalf("MigrationVersion failed: %v", err)
 		}
@@ -358,7 +347,7 @@ func TestApply(t *testing.T) {
 		plan1 := mustDiff(t, empty, v1)
 		mustApply(t, db, plan1)
 
-		ver, err := MigrationVersion(ctx, db)
+		ver, err := MigrationVersion(db)
 		if err != nil {
 			t.Fatalf("MigrationVersion failed: %v", err)
 		}
@@ -373,7 +362,7 @@ func TestApply(t *testing.T) {
 		plan2 := mustDiff(t, current, v2)
 		mustApply(t, db, plan2)
 
-		ver, err = MigrationVersion(ctx, db)
+		ver, err = MigrationVersion(db)
 		if err != nil {
 			t.Fatalf("MigrationVersion failed: %v", err)
 		}
@@ -392,7 +381,7 @@ func TestApply(t *testing.T) {
 		plan1 := mustDiff(t, empty, v1)
 		mustApply(t, db, plan1)
 
-		ver, err := MigrationVersion(ctx, db)
+		ver, err := MigrationVersion(db)
 		if err != nil {
 			t.Fatalf("MigrationVersion failed: %v", err)
 		}
@@ -407,7 +396,7 @@ func TestApply(t *testing.T) {
 		noop := mustDiff(t, current, sameDesired)
 		mustApply(t, db, noop)
 
-		ver, err = MigrationVersion(ctx, db)
+		ver, err = MigrationVersion(db)
 		if err != nil {
 			t.Fatalf("MigrationVersion failed: %v", err)
 		}
@@ -438,7 +427,7 @@ func TestApply(t *testing.T) {
 			t.Fatalf("Diff failed: %v", err)
 		}
 
-		err = Apply(ctx, db, plan2, ApplyOptions{AllowDestructive: true})
+		err = Apply(db, plan2, ApplyOptions{AllowDestructive: true})
 		if err == nil {
 			t.Fatal("expected DriftError, got nil")
 		}

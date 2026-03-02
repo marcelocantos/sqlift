@@ -228,8 +228,9 @@ sqlift::apply(db, restored);
 
 ## Go
 
-Module: `github.com/marcelocantos/sqlift/go/sqlift`. Requires CGo (uses
-`github.com/mattn/go-sqlite3`).
+Module: `github.com/marcelocantos/sqlift/go/sqlift`. Requires CGo. Wraps
+the C++ implementation via an `extern "C"` interface (no `database/sql` or
+third-party driver).
 
 ```go
 import "github.com/marcelocantos/sqlift/go/sqlift"
@@ -238,8 +239,6 @@ import "github.com/marcelocantos/sqlift/go/sqlift"
 ### Core workflow
 
 ```go
-ctx := context.Background()
-
 // 1. Declare desired schema as plain SQL
 desired, err := sqlift.Parse(`
     CREATE TABLE users (
@@ -251,15 +250,16 @@ desired, err := sqlift.Parse(`
 `)
 
 // 2. Extract current schema from a live database
-db, _ := sql.Open("sqlite3", "app.db")
-current, err := sqlift.Extract(ctx, db)
+db, _ := sqlift.Open("app.db")
+defer db.Close()
+current, err := sqlift.Extract(db)
 
 // 3. Diff (pure function, no DB access)
 plan, err := sqlift.Diff(current, desired)
 
 // 4. Apply
 if !plan.Empty() {
-    err = sqlift.Apply(ctx, db, plan, sqlift.ApplyOptions{})
+    err = sqlift.Apply(db, plan, sqlift.ApplyOptions{})
 }
 ```
 
@@ -269,15 +269,28 @@ if !plan.Empty() {
 
 | Function | Signature | Does |
 |----------|-----------|------|
+| `Open` | `func Open(path string) (*Database, error)` | Open a SQLite database. |
 | `Parse` | `func Parse(ddl string) (Schema, error)` | Parse DDL into Schema. Returns `*ParseError`. |
-| `Extract` | `func Extract(ctx context.Context, db *sql.DB) (Schema, error)` | Read schema from live DB. |
+| `Extract` | `func Extract(db *Database) (Schema, error)` | Read schema from live DB. |
 | `Diff` | `func Diff(current, desired Schema) (MigrationPlan, error)` | Pure diff. Returns `*BreakingChangeError` on unsafe changes. Populates warnings for redundant indexes. |
 | `DetectRedundantIndexes` | `func DetectRedundantIndexes(schema Schema) []Warning` | Detect prefix-duplicate and PK-duplicate indexes. |
-| `Apply` | `func Apply(ctx context.Context, db *sql.DB, plan MigrationPlan, opts ApplyOptions) error` | Execute plan. Returns `*DestructiveError`, `*DriftError`, `*ApplyError`. |
+| `Apply` | `func Apply(db *Database, plan MigrationPlan, opts ApplyOptions) error` | Execute plan. Returns `*DestructiveError`, `*DriftError`, `*ApplyError`. |
 | `ToJSON` | `func ToJSON(plan MigrationPlan) ([]byte, error)` | Serialize plan to JSON bytes. |
 | `FromJSON` | `func FromJSON(data []byte) (MigrationPlan, error)` | Deserialize plan from JSON. Returns `*JSONError`. |
 | `ParseOpType` | `func ParseOpType(s string) (OpType, error)` | Parse string to OpType. Returns `*JSONError`. |
-| `MigrationVersion` | `func MigrationVersion(ctx context.Context, db *sql.DB) (int64, error)` | Migration version counter. |
+| `MigrationVersion` | `func MigrationVersion(db *Database) (int64, error)` | Migration version counter. |
+
+#### Database type
+
+```go
+type Database struct { /* opaque C handle */ }
+
+func Open(path string) (*Database, error)
+func (d *Database) Close()
+func (d *Database) Exec(sql string) error
+func (d *Database) QueryInt64(sql string) (int64, error)
+func (d *Database) QueryText(sql string) (string, error)
+```
 
 #### Error types
 
@@ -306,7 +319,7 @@ for _, op := range plan.Operations() {
 }
 
 // Allow destructive operations (drops)
-err := sqlift.Apply(ctx, db, plan, sqlift.ApplyOptions{AllowDestructive: true})
+err := sqlift.Apply(db, plan, sqlift.ApplyOptions{AllowDestructive: true})
 
 // Handle drift
 var driftErr *sqlift.DriftError
@@ -319,7 +332,7 @@ data, _ := sqlift.ToJSON(plan)
 
 // Deserialize and apply on another machine
 restored, _ := sqlift.FromJSON(data)
-sqlift.Apply(ctx, db, restored, sqlift.ApplyOptions{})
+sqlift.Apply(db, restored, sqlift.ApplyOptions{})
 ```
 
 ### Cross-language compatibility

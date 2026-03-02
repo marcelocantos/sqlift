@@ -4,7 +4,6 @@
 package sqlift
 
 import (
-	"context"
 	"errors"
 	"testing"
 )
@@ -101,7 +100,6 @@ func TestRoundtrip(t *testing.T) {
 		const v2 = "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT);" +
 			"CREATE TABLE posts (id INTEGER PRIMARY KEY, user_id INTEGER REFERENCES users(id), title TEXT NOT NULL);"
 
-		ctx := context.Background()
 		db := openMemory(t)
 
 		// Apply v1.
@@ -120,8 +118,7 @@ func TestRoundtrip(t *testing.T) {
 		mustApply(t, db, plan2)
 
 		// Verify Alice is still in users.
-		var name string
-		err := db.QueryRowContext(ctx, "SELECT name FROM users WHERE id = 1").Scan(&name)
+		name, err := db.QueryText("SELECT name FROM users WHERE id = 1")
 		if err != nil {
 			t.Fatalf("query for Alice failed: %v", err)
 		}

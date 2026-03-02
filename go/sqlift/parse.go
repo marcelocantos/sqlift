@@ -3,30 +3,31 @@
 
 package sqlift
 
+//#include "sqlift_c.h"
+//#include <stdlib.h>
+import "C"
 import (
-	"context"
-	"database/sql"
-
-	_ "github.com/mattn/go-sqlite3"
+	"encoding/json"
+	"unsafe"
 )
 
 // Parse opens a temporary in-memory SQLite database, executes the provided
 // DDL, and returns the resulting Schema.
-//
-// Port of C++ parse() (dist/sqlift.cpp lines 756-766).
 func Parse(ddl string) (Schema, error) {
-	db, err := sql.Open("sqlite3", ":memory:")
-	if err != nil {
-		return Schema{}, &ParseError{Msg: "Failed to parse schema SQL: " + err.Error()}
+	cddl := C.CString(ddl)
+	defer C.free(unsafe.Pointer(cddl))
+
+	var errType C.int
+	var errMsg *C.char
+	result := C.sqlift_parse(cddl, &errType, &errMsg)
+	if result == nil {
+		return Schema{}, goError(errType, errMsg)
 	}
-	defer db.Close()
+	defer C.sqlift_free(unsafe.Pointer(result))
 
-	// Ensure the pool does not open a second in-memory database.
-	db.SetMaxOpenConns(1)
-
-	if _, err := db.Exec(ddl); err != nil {
-		return Schema{}, &ParseError{Msg: "Failed to parse schema SQL: " + err.Error()}
+	var schema Schema
+	if err := json.Unmarshal([]byte(C.GoString(result)), &schema); err != nil {
+		return Schema{}, &ParseError{Msg: "failed to decode schema JSON: " + err.Error()}
 	}
-
-	return Extract(context.Background(), db)
+	return schema, nil
 }

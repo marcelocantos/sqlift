@@ -21,14 +21,14 @@ const (
 
 // Column represents a single column in a table.
 type Column struct {
-	Name          string
-	Type          string // Uppercase. Empty if untyped.
-	NotNull       bool
-	DefaultValue  string        // Raw SQL expression; empty if no default.
-	PK            int           // 0 = not PK, 1+ = position in composite PK.
-	Collation     string        // e.g. "NOCASE"; empty = default (BINARY).
-	Generated     GeneratedType // Normal, Virtual, or Stored.
-	GeneratedExpr string        // e.g. "first_name || ' ' || last_name"; empty if not generated.
+	Name          string        `json:"name"`
+	Type          string        `json:"type"`           // Uppercase. Empty if untyped.
+	NotNull       bool          `json:"notnull"`
+	DefaultValue  string        `json:"default_value"`  // Raw SQL expression; empty if no default.
+	PK            int           `json:"pk"`             // 0 = not PK, 1+ = position in composite PK.
+	Collation     string        `json:"collation"`      // e.g. "NOCASE"; empty = default (BINARY).
+	Generated     GeneratedType `json:"generated"`      // Normal, Virtual, or Stored.
+	GeneratedExpr string        `json:"generated_expr"` // e.g. "first_name || ' ' || last_name"; empty if not generated.
 }
 
 // Equal returns true if all column fields match.
@@ -45,8 +45,8 @@ func (c Column) Equal(o Column) bool {
 
 // CheckConstraint represents a CHECK constraint on a table.
 type CheckConstraint struct {
-	Name       string // empty if unnamed
-	Expression string // e.g. "age > 0"
+	Name       string `json:"name"`       // empty if unnamed
+	Expression string `json:"expression"` // e.g. "age > 0"
 }
 
 // Equal returns true if both name and expression match.
@@ -56,12 +56,12 @@ func (c CheckConstraint) Equal(o CheckConstraint) bool {
 
 // ForeignKey represents a foreign key constraint.
 type ForeignKey struct {
-	ConstraintName string   // empty if unnamed (cosmetic, excluded from Equal)
-	FromColumns    []string
-	ToTable        string
-	ToColumns      []string
-	OnUpdate       string // default "NO ACTION"
-	OnDelete       string // default "NO ACTION"
+	ConstraintName string   `json:"constraint_name"` // empty if unnamed (cosmetic, excluded from Equal)
+	FromColumns    []string `json:"from_columns"`
+	ToTable        string   `json:"to_table"`
+	ToColumns      []string `json:"to_columns"`
+	OnUpdate       string   `json:"on_update"` // default "NO ACTION"
+	OnDelete       string   `json:"on_delete"` // default "NO ACTION"
 }
 
 // Equal compares structural fields only, excluding ConstraintName (cosmetic).
@@ -75,14 +75,14 @@ func (f ForeignKey) Equal(o ForeignKey) bool {
 
 // Table represents a database table.
 type Table struct {
-	Name             string
-	Columns          []Column          // Ordered by cid.
-	ForeignKeys      []ForeignKey
-	CheckConstraints []CheckConstraint
-	PKConstraintName string // empty if unnamed (cosmetic, excluded from Equal)
-	WithoutRowid     bool
-	Strict           bool
-	RawSQL           string // Original CREATE TABLE from sqlite_master.
+	Name             string            `json:"name"`
+	Columns          []Column          `json:"columns"`           // Ordered by cid.
+	ForeignKeys      []ForeignKey      `json:"foreign_keys"`
+	CheckConstraints []CheckConstraint `json:"check_constraints"`
+	PKConstraintName string            `json:"pk_constraint_name"` // empty if unnamed (cosmetic, excluded from Equal)
+	WithoutRowid     bool              `json:"without_rowid"`
+	Strict           bool              `json:"strict"`
+	RawSQL           string            `json:"raw_sql"` // Original CREATE TABLE from sqlite_master.
 }
 
 // Equal compares structural fields only, excluding RawSQL and PKConstraintName.
@@ -119,12 +119,12 @@ func (t Table) Equal(o Table) bool {
 
 // Index represents a database index.
 type Index struct {
-	Name        string
-	TableName   string
-	Columns     []string
-	Unique      bool
-	WhereClause string // Partial index; empty if not partial.
-	RawSQL      string // Original CREATE INDEX from sqlite_master.
+	Name        string   `json:"name"`
+	TableName   string   `json:"table_name"`
+	Columns     []string `json:"columns"`
+	Unique      bool     `json:"unique"`
+	WhereClause string   `json:"where_clause"` // Partial index; empty if not partial.
+	RawSQL      string   `json:"raw_sql"`      // Original CREATE INDEX from sqlite_master.
 }
 
 // Equal compares structural fields only, excluding RawSQL.
@@ -138,8 +138,8 @@ func (idx Index) Equal(o Index) bool {
 
 // View represents a database view.
 type View struct {
-	Name string
-	SQL  string
+	Name string `json:"name"`
+	SQL  string `json:"sql"`
 }
 
 // Equal returns true if both name and SQL match.
@@ -149,9 +149,9 @@ func (v View) Equal(o View) bool {
 
 // Trigger represents a database trigger.
 type Trigger struct {
-	Name      string
-	TableName string
-	SQL       string
+	Name      string `json:"name"`
+	TableName string `json:"table_name"`
+	SQL       string `json:"sql"`
 }
 
 // Equal returns true if all fields match.
@@ -161,10 +161,10 @@ func (tr Trigger) Equal(o Trigger) bool {
 
 // Schema represents the complete schema of a database.
 type Schema struct {
-	Tables   map[string]Table
-	Indexes  map[string]Index
-	Views    map[string]View
-	Triggers map[string]Trigger
+	Tables   map[string]Table   `json:"tables"`
+	Indexes  map[string]Index   `json:"indexes"`
+	Views    map[string]View    `json:"views"`
+	Triggers map[string]Trigger `json:"triggers"`
 }
 
 // Equal returns true if all schema objects are structurally equal.

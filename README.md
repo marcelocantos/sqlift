@@ -106,6 +106,11 @@ cd go/sqlift
 go test ./...
 ```
 
+## Related projects
+
+- **[sqldeep](https://github.com/marcelocantos/sqldeep)** — JSON5-like SQL syntax transpiler. Write nested JSON queries naturally; sqldeep rewrites them into SQLite JSON functions.
+- **[sqlpipe](https://github.com/marcelocantos/sqlpipe)** — Streaming SQLite replication protocol. Keeps two databases in sync over any transport.
+
 ## License
 
 Apache 2.0 -- see [LICENSE](LICENSE).
