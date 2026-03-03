@@ -73,7 +73,7 @@ Requires CGo (uses [mattn/go-sqlite3](https://github.com/mattn/go-sqlite3)).
 ### Agent guide
 
 If you use an agentic coding tool (Claude Code, Cursor, Copilot, etc.), include
-[`dist/agents-guide.md`](dist/agents-guide.md) in your project context for a
+[`dist/sqlift-agents-guide.md`](dist/sqlift-agents-guide.md) in your project context for a
 condensed API reference covering both C++ and Go.
 
 ## Documentation
@@ -82,7 +82,7 @@ condensed API reference covering both C++ and Go.
 - **[Guide](docs/guide.md)** -- design rationale, core concepts, and feature reference
 - **[C++ API Reference](docs/reference.md)** -- complete C++ API reference
 - **[Go API Reference](docs/reference-go.md)** -- complete Go API reference
-- **[Agent Guide](dist/agents-guide.md)** -- condensed reference for AI coding agents
+- **[Agent Guide](dist/sqlift-agents-guide.md)** -- condensed reference for AI coding agents
 - **[Changelog](https://github.com/marcelocantos/sqlift/releases)** -- release history with notes
 
 ## Building and testing

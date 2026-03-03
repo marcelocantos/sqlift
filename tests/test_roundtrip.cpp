@@ -1,7 +1,9 @@
 #include <doctest/doctest.h>
-#include "sqlift.h"
+#include "test_helpers.h"
 
-using namespace sqlift;
+#include <nlohmann/json.hpp>
+
+using json = nlohmann::json;
 
 TEST_CASE("roundtrip: empty to schema") {
     auto sql =
@@ -12,39 +14,40 @@ TEST_CASE("roundtrip: empty to schema") {
         ");"
         "CREATE INDEX idx_email ON users(email);";
 
-    Schema desired = parse(sql);
-    Database db(":memory:");
-    Schema empty = extract(db);
+    auto desired_str = parse_schema(sql);
+    auto desired = json::parse(desired_str);
 
-    auto plan = diff(empty, desired);
-    apply(db, plan);
+    TestDB db;
+    auto current = extract_schema(db.db);
+    auto plan_str = diff_schemas(current, desired_str);
+    apply_plan(db.db, plan_str);
 
-    Schema after = extract(db);
-    CHECK(after.tables.size() == desired.tables.size());
-    CHECK(after.indexes.size() == desired.indexes.size());
+    auto after = json::parse(extract_schema(db.db));
+    CHECK(after["tables"].size() == desired["tables"].size());
+    CHECK(after["indexes"].size() == desired["indexes"].size());
 
     // Verify column structure matches
-    const auto& dt = desired.tables.at("users");
-    const auto& at = after.tables.at("users");
-    REQUIRE(dt.columns.size() == at.columns.size());
-    for (size_t i = 0; i < dt.columns.size(); ++i) {
-        CHECK(dt.columns[i].name == at.columns[i].name);
-        CHECK(dt.columns[i].type == at.columns[i].type);
-        CHECK(dt.columns[i].notnull == at.columns[i].notnull);
-        CHECK(dt.columns[i].pk == at.columns[i].pk);
+    const auto& dt = desired["tables"]["users"]["columns"];
+    const auto& at = after["tables"]["users"]["columns"];
+    REQUIRE(dt.size() == at.size());
+    for (size_t i = 0; i < dt.size(); ++i) {
+        CHECK(dt[i]["name"] == at[i]["name"]);
+        CHECK(dt[i]["type"] == at[i]["type"]);
+        CHECK(dt[i]["notnull"] == at[i]["notnull"]);
+        CHECK(dt[i]["pk"] == at[i]["pk"]);
     }
 }
 
 TEST_CASE("roundtrip: idempotent apply") {
     auto sql = "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);";
-    Schema desired = parse(sql);
+    auto desired = parse_schema(sql);
 
-    Database db(":memory:");
-    apply(db, diff(extract(db), desired));
+    TestDB db;
+    apply_plan(db.db, diff_schemas(extract_schema(db.db), desired));
 
     // Second diff should be empty
-    auto plan = diff(extract(db), desired);
-    CHECK(plan.empty());
+    auto plan_str = diff_schemas(extract_schema(db.db), desired);
+    CHECK(json::parse(plan_str)["operations"].empty());
 }
 
 TEST_CASE("roundtrip: v1 to v2 migration") {
@@ -57,33 +60,31 @@ TEST_CASE("roundtrip: v1 to v2 migration") {
         "  title TEXT NOT NULL"
         ");";
 
-    Database db(":memory:");
+    TestDB db;
 
     // Apply v1
-    Schema v1 = parse(v1_sql);
-    apply(db, diff(extract(db), v1));
+    auto v1 = parse_schema(v1_sql);
+    apply_plan(db.db, diff_schemas(extract_schema(db.db), v1));
 
     // Insert data
     db.exec("INSERT INTO users VALUES (1, 'Alice');");
 
     // Apply v2
-    Schema v2 = parse(v2_sql);
-    auto plan = diff(extract(db), v2);
-    apply(db, plan);
+    auto v2 = parse_schema(v2_sql);
+    auto plan_str = diff_schemas(extract_schema(db.db), v2);
+    apply_plan(db.db, plan_str);
 
     // Verify data preserved
-    Statement stmt(db, "SELECT name FROM users WHERE id = 1");
-    REQUIRE(stmt.step());
-    CHECK(stmt.column_text(0) == "Alice");
+    CHECK(db.query_text("SELECT name FROM users WHERE id = 1") == "Alice");
 
     // Verify new table exists
-    Schema after = extract(db);
-    CHECK(after.tables.count("posts"));
-    CHECK(after.tables.at("users").columns.size() == 3);
+    auto after = json::parse(extract_schema(db.db));
+    CHECK(after["tables"].contains("posts"));
+    CHECK(after["tables"]["users"]["columns"].size() == 3);
 
     // Idempotent check
-    auto plan2 = diff(extract(db), v2);
-    CHECK(plan2.empty());
+    auto plan2_str = diff_schemas(extract_schema(db.db), v2);
+    CHECK(json::parse(plan2_str)["operations"].empty());
 }
 
 TEST_CASE("cross-language hash: known DDL produces expected SHA-256") {
@@ -109,8 +110,8 @@ TEST_CASE("cross-language hash: known DDL produces expected SHA-256") {
         "CREATE VIEW active_users AS SELECT id, name FROM users WHERE age > 18;"
         "CREATE TRIGGER trg_posts_delete AFTER DELETE ON posts BEGIN SELECT 1; END;";
 
-    Schema schema = parse(ddl);
-    CHECK(schema.hash() == "e712ade60030bfb83109e2bc49ba2d6d3025ade275dffde2a33ea5279dc99c13");
+    auto schema_str = parse_schema(ddl);
+    CHECK(schema_hash(schema_str) == "e712ade60030bfb83109e2bc49ba2d6d3025ade275dffde2a33ea5279dc99c13");
 }
 
 TEST_CASE("roundtrip: v1 to v2 to v3 breaking change rejected") {
@@ -118,15 +119,15 @@ TEST_CASE("roundtrip: v1 to v2 to v3 breaking change rejected") {
     auto v2 = "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT);";
     auto v3 = "CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT NOT NULL);";
 
-    Database db(":memory:");
+    TestDB db;
 
     // v1
-    apply(db, diff(extract(db), parse(v1)));
+    apply_plan(db.db, diff_schemas(extract_schema(db.db), parse_schema(v1)));
     db.exec("INSERT INTO users VALUES (1, 'Alice');");
 
     // v2
-    apply(db, diff(extract(db), parse(v2)));
+    apply_plan(db.db, diff_schemas(extract_schema(db.db), parse_schema(v2)));
 
     // v3 makes email NOT NULL — this is a breaking change and must be rejected
-    CHECK_THROWS_AS(diff(extract(db), parse(v3)), BreakingChangeError);
+    CHECK(diff_err(extract_schema(db.db), parse_schema(v3)) == SQLIFT_BREAKING_CHANGE_ERROR);
 }

@@ -1,6 +1,6 @@
 # Guide
 
-sqlift is a declarative SQLite schema migration library for C++ and Go.
+sqlift is a declarative SQLite schema migration library for C and Go.
 
 ## The problem with numbered migrations
 
@@ -95,17 +95,22 @@ for drift detection on the next run.
 
 Here is the basic workflow in both languages.
 
-**C++:**
+**C:**
 
-```cpp
-sqlift::Schema desired = sqlift::parse(R"(
-    CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
-)");
-sqlift::Database db("app.db");
-sqlift::Schema current = sqlift::extract(db);
-sqlift::MigrationPlan plan = sqlift::diff(current, desired);
-if (!plan.empty())
-    sqlift::apply(db, plan);
+```c
+int err_type;
+char* err_msg = NULL;
+char* desired = sqlift_parse(
+    "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL);",
+    &err_type, &err_msg);
+sqlift_db* db = sqlift_db_open("app.db", 0, &err_type, &err_msg);
+char* current = sqlift_extract(db, &err_type, &err_msg);
+char* plan = sqlift_diff(current, desired, &err_type, &err_msg);
+sqlift_apply(db, plan, 0, &err_type, &err_msg);
+sqlift_free(plan);
+sqlift_free(current);
+sqlift_free(desired);
+sqlift_db_close(db);
 ```
 
 **Go:**
@@ -171,17 +176,14 @@ Every `MigrationPlan` is fully inspectable before execution. You can iterate
 its operations and decide whether to proceed, log the plan, or present it for
 human review.
 
-**C++:**
+**C:**
 
-```cpp
-sqlift::MigrationPlan plan = sqlift::diff(current, desired);
-for (const auto& op : plan.operations()) {
-    std::cout << op.description << "\n";
-    for (const auto& sql : op.sql)
-        std::cout << "  " << sql << "\n";
-    if (op.destructive)
-        std::cout << "  [DESTRUCTIVE]\n";
-}
+```c
+char* plan = sqlift_diff(current, desired, &err_type, &err_msg);
+// plan is a JSON string with "operations" array.
+// Parse with any JSON library to inspect individual operations.
+// Each operation has: type, object_name, description, sql, destructive.
+printf("%s\n", plan);
 ```
 
 **Go:**
@@ -221,14 +223,14 @@ operations. This is a safety net: in development you typically allow them, while
 in production the refusal gives you a chance to review the plan and confirm that
 dropping data is intentional.
 
-**C++:**
+**C:**
 
-```cpp
-// This throws DestructiveError if the plan drops anything
-sqlift::apply(db, plan);
+```c
+// Returns SQLIFT_DESTRUCTIVE_ERROR if the plan drops anything
+sqlift_apply(db, plan, /*allow_destructive=*/0, &err_type, &err_msg);
 
 // Opt in to destructive operations
-sqlift::apply(db, plan, {.allow_destructive = true});
+sqlift_apply(db, plan, /*allow_destructive=*/1, &err_type, &err_msg);
 ```
 
 **Go:**
@@ -266,13 +268,13 @@ There are four detected cases:
    with no DEFAULT value. Existing rows cannot be populated -- SQLite has no
    value to put in the new column.
 
-**C++:**
+**C:**
 
-```cpp
-try {
-    auto plan = sqlift::diff(current, desired);
-} catch (const sqlift::BreakingChangeError& e) {
-    std::cerr << e.what() << "\n";
+```c
+char* plan = sqlift_diff(current, desired, &err_type, &err_msg);
+if (err_type == SQLIFT_BREAKING_CHANGE_ERROR) {
+    fprintf(stderr, "%s\n", err_msg);
+    sqlift_free(err_msg);
 }
 ```
 
@@ -310,12 +312,12 @@ enforces a tighter constraint).
 Warnings are informational -- they do not prevent `diff()` or `apply()` from
 succeeding. Inspect them to clean up unnecessary indexes:
 
-**C++:**
+**C:**
 
-```cpp
-auto plan = sqlift::diff(current, desired);
-for (const auto& w : plan.warnings())
-    std::cerr << w.message << "\n";
+```c
+char* plan = sqlift_diff(current, desired, &err_type, &err_msg);
+// The plan JSON includes a "warnings" array.
+// Parse the JSON to inspect warnings.
 ```
 
 **Go:**
@@ -329,10 +331,12 @@ for _, w := range plan.Warnings() {
 
 You can also analyse a schema independently:
 
-**C++:**
+**C:**
 
-```cpp
-auto warnings = sqlift::detect_redundant_indexes(desired);
+```c
+char* warnings = sqlift_detect_redundant_indexes(desired, &err_type, &err_msg);
+// warnings is a JSON array of warning objects.
+sqlift_free(warnings);
 ```
 
 **Go:**
@@ -354,13 +358,13 @@ the schema, or bugs that issue raw DDL.
 The `_sqlift_state` table is automatically excluded from schema extraction, so
 it does not appear in diffs or interfere with your schema definitions.
 
-**C++:**
+**C:**
 
-```cpp
-try {
-    sqlift::apply(db, plan);
-} catch (const sqlift::DriftError& e) {
-    std::cerr << "Schema was modified outside of sqlift: " << e.what() << "\n";
+```c
+int rc = sqlift_apply(db, plan, 0, &err_type, &err_msg);
+if (err_type == SQLIFT_DRIFT_ERROR) {
+    fprintf(stderr, "Schema was modified outside of sqlift: %s\n", err_msg);
+    sqlift_free(err_msg);
 }
 ```
 
@@ -514,13 +518,16 @@ transmission between environments. The JSON format is versioned (`"version":
 1`). Deserialisation validates all required fields and raises `JsonError` /
 `JSONError` on any parsing or validation failure.
 
-**C++:**
+**C:**
 
-```cpp
-std::string json = sqlift::to_json(plan);
+```c
+// sqlift_diff() returns the plan as a JSON string directly.
+// Save it to a file, send over HTTP, log it, etc.
+char* plan = sqlift_diff(current, desired, &err_type, &err_msg);
 
-sqlift::MigrationPlan restored = sqlift::from_json(json);
-sqlift::apply(db, restored);
+// Later, pass the saved JSON string to sqlift_apply():
+sqlift_apply(db, plan, 0, &err_type, &err_msg);
+sqlift_free(plan);
 ```
 
 **Go:**
@@ -534,11 +541,11 @@ err = sqlift.Apply(db, restored, sqlift.ApplyOptions{})
 
 ## Cross-language compatibility
 
-The C++ and Go implementations produce identical SHA-256 schema hashes. A
+The C and Go implementations produce identical SHA-256 schema hashes. A
 database migrated by one implementation can be continued by the other without
 triggering drift detection. JSON-serialised migration plans are interchangeable
 between the two implementations as well -- you can generate a plan in Go,
-serialise it, and apply it from C++, or vice versa.
+serialise it, and apply it from C, or vice versa.
 
 ## What sqlift does not do
 
@@ -561,23 +568,23 @@ engines.
 
 ## Error handling
 
-Errors are reported via exceptions in C++ and error values in Go.
+Errors are reported via error codes in C and error values in Go.
 
-**C++ exceptions** (all inherit from `sqlift::Error`, which inherits from
-`std::runtime_error`):
+**C error codes** (returned via `int* err_type` output parameter):
 
-| Exception | Thrown when |
-|-----------|------------|
-| `ParseError` | SQL passed to `parse()` is invalid |
-| `ExtractError` | Schema extraction from a live database fails |
-| `DiffError` | Schema comparison encounters an internal error |
-| `ApplyError` | SQL execution fails during `apply()` (e.g. FK violation) |
-| `DestructiveError` | Plan has destructive ops and `allow_destructive` is false |
-| `DriftError` | Schema was modified outside of sqlift since last apply |
-| `BreakingChangeError` | Schema change depends on existing data |
-| `JsonError` | Invalid JSON or missing fields in `from_json()` |
+| Code | Returned when |
+|------|---------------|
+| `SQLIFT_PARSE_ERROR` | DDL passed to `sqlift_parse()` is invalid |
+| `SQLIFT_EXTRACT_ERROR` | Schema extraction from a live database fails |
+| `SQLIFT_DIFF_ERROR` | Schema comparison encounters an internal error |
+| `SQLIFT_APPLY_ERROR` | SQL execution fails during `sqlift_apply()` (e.g. FK violation) |
+| `SQLIFT_DESTRUCTIVE_ERROR` | Plan has destructive ops and `allow_destructive` is 0 |
+| `SQLIFT_DRIFT_ERROR` | Schema was modified outside of sqlift since last apply |
+| `SQLIFT_BREAKING_CHANGE_ERROR` | Schema change depends on existing data |
+| `SQLIFT_JSON_ERROR` | Invalid JSON or missing fields in plan JSON |
 
-All exceptions carry a descriptive `what()` message.
+On failure, the accompanying `char** err_msg` output is set to a heap-allocated
+descriptive message. The caller must free it with `sqlift_free()`.
 
 **Go error types** (independent struct types implementing `error`; use
 `errors.As` to match):
@@ -595,30 +602,29 @@ All exceptions carry a descriptive `what()` message.
 
 Each error type has a `Msg` field with a descriptive message.
 
-## Utility classes (C++ only)
+## Database handle (C)
 
-sqlift includes lightweight RAII wrappers for `sqlite3*` and `sqlite3_stmt*`.
-The Go implementation wraps the C++ library via an `extern "C"` interface,
-providing its own `Database` type.
+The C API provides an opaque `sqlift_db` handle for managing SQLite connections.
+The Go implementation wraps this handle, providing its own `Database` type.
 
-```cpp
-// Database opens on construction, closes on destruction
-sqlift::Database db("app.db");
-db.exec("INSERT INTO users (name) VALUES ('Alice')");
+```c
+// Open a database
+int err_type;
+char* err_msg = NULL;
+sqlift_db* db = sqlift_db_open("app.db", 0, &err_type, &err_msg);
 
-// Statement prepares on construction, finalises on destruction
-sqlift::Statement stmt(db, "SELECT name FROM users WHERE id = ?");
-stmt.bind_int(1, 42);
-if (stmt.step()) {
-    std::string name = stmt.column_text(0);
-}
+// Execute SQL with no result
+sqlift_db_exec(db, "INSERT INTO users (name) VALUES ('Alice')", &err_msg);
+
+// Query a single value
+int64_t count;
+sqlift_db_query_int64(db, "SELECT count(*) FROM users", &count, &err_msg);
+
+// Close when done
+sqlift_db_close(db);
 ```
-
-Both are move-only (no copy). The `Database` class implicitly converts to
-`sqlite3*`, so you can pass it directly to any function expecting a raw SQLite
-handle.
 
 ---
 
-For complete API details, see [C++ Reference](reference.md) and
+For complete API details, see [C Reference](reference.md) and
 [Go Reference](reference-go.md).

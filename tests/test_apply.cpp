@@ -1,103 +1,98 @@
 #include <doctest/doctest.h>
-#include "sqlift.h"
+#include "test_helpers.h"
 
-using namespace sqlift;
+#include <nlohmann/json.hpp>
+using json = nlohmann::json;
 
 TEST_CASE("apply create table") {
-    Database db(":memory:");
-    Schema desired = parse("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);");
-    Schema current = extract(db);
-    auto plan = diff(current, desired);
+    TestDB db;
+    auto desired = parse_schema("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);");
+    auto current = extract_schema(db.db);
+    auto plan_str = diff_schemas(current, desired);
 
-    apply(db, plan);
+    apply_plan(db.db, plan_str);
 
-    Schema after = extract(db);
+    auto after = json::parse(extract_schema(db.db));
     // Compare structurally (ignore raw_sql differences)
-    REQUIRE(after.tables.size() == 1);
-    CHECK(after.tables.count("users"));
-    CHECK(after.tables.at("users").columns.size() == 2);
+    REQUIRE(after["tables"].size() == 1);
+    CHECK(after["tables"].contains("users"));
+    CHECK(after["tables"]["users"]["columns"].size() == 2);
 }
 
 TEST_CASE("apply add column") {
-    Database db(":memory:");
+    TestDB db;
     db.exec("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);");
     db.exec("INSERT INTO users VALUES (1, 'Alice');");
 
-    Schema desired = parse(
+    auto desired = parse_schema(
         "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT);");
-    Schema current = extract(db);
-    auto plan = diff(current, desired);
+    auto current = extract_schema(db.db);
+    auto plan_str = diff_schemas(current, desired);
 
-    apply(db, plan);
+    apply_plan(db.db, plan_str);
 
     // Verify data preserved
-    Statement stmt(db, "SELECT name FROM users WHERE id = 1");
-    REQUIRE(stmt.step());
-    CHECK(stmt.column_text(0) == "Alice");
+    CHECK(db.query_text("SELECT name FROM users WHERE id = 1") == "Alice");
 
     // Verify new column exists
-    Schema after = extract(db);
-    CHECK(after.tables.at("users").columns.size() == 3);
+    auto after = json::parse(extract_schema(db.db));
+    CHECK(after["tables"]["users"]["columns"].size() == 3);
 }
 
 TEST_CASE("apply rebuild table - change column type") {
-    Database db(":memory:");
+    TestDB db;
     db.exec("CREATE TABLE users (id INTEGER PRIMARY KEY, age TEXT);");
     db.exec("INSERT INTO users VALUES (1, '30');");
 
-    Schema desired = parse(
+    auto desired = parse_schema(
         "CREATE TABLE users (id INTEGER PRIMARY KEY, age INTEGER);");
-    Schema current = extract(db);
-    auto plan = diff(current, desired);
+    auto current = extract_schema(db.db);
+    auto plan_str = diff_schemas(current, desired);
 
-    apply(db, plan);
+    apply_plan(db.db, plan_str);
 
     // Data should be preserved (SQLite will coerce TEXT '30' to INTEGER 30)
-    Statement stmt(db, "SELECT age FROM users WHERE id = 1");
-    REQUIRE(stmt.step());
-    CHECK(stmt.column_text(0) == "30");
+    CHECK(db.query_text("SELECT age FROM users WHERE id = 1") == "30");
 }
 
 TEST_CASE("apply refuses destructive without flag") {
-    Database db(":memory:");
+    TestDB db;
     db.exec("CREATE TABLE users (id INTEGER PRIMARY KEY);");
 
-    Schema current = extract(db);
-    Schema desired; // empty = drop everything
-    auto plan = diff(current, desired);
+    auto current = extract_schema(db.db);
+    auto desired = empty_schema();
+    auto plan_str = diff_schemas(current, desired);
 
-    CHECK_THROWS_AS(apply(db, plan), DestructiveError);
+    CHECK(apply_err(db.db, plan_str) == SQLIFT_DESTRUCTIVE_ERROR);
 }
 
 TEST_CASE("apply destructive with flag") {
-    Database db(":memory:");
+    TestDB db;
     db.exec("CREATE TABLE users (id INTEGER PRIMARY KEY);");
 
-    Schema current = extract(db);
-    Schema desired;
-    auto plan = diff(current, desired);
+    auto current = extract_schema(db.db);
+    auto desired = empty_schema();
+    auto plan_str = diff_schemas(current, desired);
 
-    apply(db, plan, {.allow_destructive = true});
+    apply_plan(db.db, plan_str, true);
 
-    Schema after = extract(db);
-    CHECK(after.tables.empty());
+    auto after = json::parse(extract_schema(db.db));
+    CHECK(after["tables"].empty());
 }
 
 TEST_CASE("apply updates state hash") {
-    Database db(":memory:");
-    Schema desired = parse("CREATE TABLE users (id INTEGER PRIMARY KEY);");
-    auto plan = diff(Schema{}, desired);
+    TestDB db;
+    auto desired = parse_schema("CREATE TABLE users (id INTEGER PRIMARY KEY);");
+    auto plan_str = diff_schemas(empty_schema(), desired);
 
-    apply(db, plan);
+    apply_plan(db.db, plan_str);
 
     // Verify _sqlift_state exists and has a hash
-    Statement stmt(db, "SELECT value FROM _sqlift_state WHERE key = 'schema_hash'");
-    REQUIRE(stmt.step());
-    CHECK(!stmt.column_text(0).empty());
+    CHECK(!db.query_text("SELECT value FROM _sqlift_state WHERE key = 'schema_hash'").empty());
 }
 
 TEST_CASE("apply FK violation includes parent table and rowid") {
-    Database db(":memory:");
+    TestDB db;
     db.exec("PRAGMA foreign_keys=OFF;");
     db.exec(
         "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);"
@@ -109,25 +104,22 @@ TEST_CASE("apply FK violation includes parent table and rowid") {
 
     // Change column type on orders to trigger a rebuild — FK is unchanged so
     // no BreakingChangeError, but the orphan data causes an FK violation.
-    Schema desired = parse(
+    auto desired = parse_schema(
         "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);"
         "CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id BIGINT REFERENCES users(id));");
-    Schema current = extract(db);
-    auto plan = diff(current, desired);
+    auto current = extract_schema(db.db);
+    auto plan_str = diff_schemas(current, desired);
 
-    try {
-        apply(db, plan);
-        FAIL("Expected ApplyError");
-    } catch (const ApplyError& e) {
-        std::string msg = e.what();
-        CHECK(msg.find("orders") != std::string::npos);
-        CHECK(msg.find("users") != std::string::npos);
-        CHECK(msg.find("rowid") != std::string::npos);
-    }
+    std::string msg;
+    int err = apply_err_msg(db.db, plan_str, msg);
+    CHECK(err == SQLIFT_APPLY_ERROR);
+    CHECK(msg.find("orders") != std::string::npos);
+    CHECK(msg.find("users") != std::string::npos);
+    CHECK(msg.find("rowid") != std::string::npos);
 }
 
 TEST_CASE("apply error recovery preserves database state") {
-    Database db(":memory:");
+    TestDB db;
     db.exec("PRAGMA foreign_keys=OFF;");
     db.exec(
         "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);"
@@ -137,146 +129,130 @@ TEST_CASE("apply error recovery preserves database state") {
         "INSERT INTO orders VALUES (2, 999);");  // orphan FK
     db.exec("PRAGMA foreign_keys=ON;");
 
-    Schema current = extract(db);
+    auto current = extract_schema(db.db);
     // Change column type on orders to trigger a rebuild — FK is unchanged
     // so no BreakingChangeError, but the orphan data causes an FK violation.
-    Schema desired = parse(
+    auto desired = parse_schema(
         "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);"
         "CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id BIGINT REFERENCES users(id));");
 
-    auto plan = diff(current, desired);
+    auto plan_str = diff_schemas(current, desired);
 
     // This should fail during the FK check step of rebuild
-    CHECK_THROWS_AS(apply(db, plan), ApplyError);
+    CHECK(apply_err(db.db, plan_str) == SQLIFT_APPLY_ERROR);
 
     // Verify the original orders table still has its data
-    Statement count_stmt(db, "SELECT count(*) FROM orders");
-    REQUIRE(count_stmt.step());
-    CHECK(count_stmt.column_int(0) == 2);
+    CHECK(db.query_int64("SELECT count(*) FROM orders") == 2);
 
     // Verify no temp table left behind
-    Statement temp_check(db,
-        "SELECT count(*) FROM sqlite_master WHERE name LIKE '%sqlift_new%'");
-    REQUIRE(temp_check.step());
-    CHECK(temp_check.column_int(0) == 0);
+    CHECK(db.query_int64("SELECT count(*) FROM sqlite_master WHERE name LIKE '%sqlift_new%'") == 0);
 
     // Verify FK enforcement is restored to ON after failed apply (T1)
-    Statement fk_check(db, "PRAGMA foreign_keys");
-    REQUIRE(fk_check.step());
-    CHECK(fk_check.column_int(0) == 1);
+    CHECK(db.query_int64("PRAGMA foreign_keys") == 1);
 }
 
 TEST_CASE("apply restores FK enforcement ON after successful rebuild") {
-    Database db(":memory:");
+    TestDB db;
     db.exec("PRAGMA foreign_keys=ON;");
     db.exec(
         "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);"
         "INSERT INTO users VALUES (1, 'Alice');");
 
-    Schema desired = parse(
+    auto desired = parse_schema(
         "CREATE TABLE users (id INTEGER PRIMARY KEY, name INTEGER);");
-    Schema current = extract(db);
-    auto plan = diff(current, desired);
+    auto current = extract_schema(db.db);
+    auto plan_str = diff_schemas(current, desired);
 
-    apply(db, plan);
+    apply_plan(db.db, plan_str);
 
-    Statement fk_check(db, "PRAGMA foreign_keys");
-    REQUIRE(fk_check.step());
-    CHECK(fk_check.column_int(0) == 1);
+    CHECK(db.query_int64("PRAGMA foreign_keys") == 1);
 }
 
 TEST_CASE("schema hash is deterministic") {
-    Schema s1 = parse("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);");
-    Schema s2 = parse("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);");
-    CHECK(s1.hash() == s2.hash());
+    auto s1 = parse_schema("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);");
+    auto s2 = parse_schema("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);");
+    CHECK(schema_hash(s1) == schema_hash(s2));
 }
 
 TEST_CASE("schema hash differs for different schemas") {
-    Schema s1 = parse("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);");
-    Schema s2 = parse("CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT);");
-    CHECK(s1.hash() != s2.hash());
+    auto s1 = parse_schema("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);");
+    auto s2 = parse_schema("CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT);");
+    CHECK(schema_hash(s1) != schema_hash(s2));
 }
 
 TEST_CASE("apply rebuilds multiple tables") {
-    Database db(":memory:");
+    TestDB db;
     db.exec(
         "CREATE TABLE a (id INTEGER PRIMARY KEY, x TEXT);"
         "CREATE TABLE b (id INTEGER PRIMARY KEY, y TEXT);"
         "INSERT INTO a VALUES (1, 'aa');"
         "INSERT INTO b VALUES (1, 'bb');");
 
-    Schema desired = parse(
+    auto desired = parse_schema(
         "CREATE TABLE a (id INTEGER PRIMARY KEY, x INTEGER);"
         "CREATE TABLE b (id INTEGER PRIMARY KEY, y INTEGER);");
-    Schema current = extract(db);
-    auto plan = diff(current, desired);
+    auto current = extract_schema(db.db);
+    auto plan_str = diff_schemas(current, desired);
 
-    apply(db, plan);
+    apply_plan(db.db, plan_str);
 
     // Verify both tables rebuilt with data preserved
-    Statement sa(db, "SELECT x FROM a WHERE id = 1");
-    REQUIRE(sa.step());
-    CHECK(sa.column_text(0) == "aa");
-
-    Statement sb(db, "SELECT y FROM b WHERE id = 1");
-    REQUIRE(sb.step());
-    CHECK(sb.column_text(0) == "bb");
+    CHECK(db.query_text("SELECT x FROM a WHERE id = 1") == "aa");
+    CHECK(db.query_text("SELECT y FROM b WHERE id = 1") == "bb");
 
     // Verify FK enforcement still ON after rebuild
-    Statement fk(db, "PRAGMA foreign_keys");
-    REQUIRE(fk.step());
-    CHECK(fk.column_int(0) == 1);
+    CHECK(db.query_int64("PRAGMA foreign_keys") == 1);
 }
 
 TEST_CASE("migration_version starts at 0") {
-    Database db(":memory:");
-    CHECK(migration_version(db) == 0);
+    TestDB db;
+    CHECK(migration_ver(db.db) == 0);
 }
 
 TEST_CASE("migration_version increments on apply") {
-    Database db(":memory:");
+    TestDB db;
 
     // First migration
-    Schema v1 = parse("CREATE TABLE users (id INTEGER PRIMARY KEY);");
-    apply(db, diff(Schema{}, v1));
-    CHECK(migration_version(db) == 1);
+    auto v1 = parse_schema("CREATE TABLE users (id INTEGER PRIMARY KEY);");
+    apply_plan(db.db, diff_schemas(empty_schema(), v1));
+    CHECK(migration_ver(db.db) == 1);
 
     // Second migration
-    Schema v2 = parse("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);");
-    Schema current = extract(db);
-    apply(db, diff(current, v2));
-    CHECK(migration_version(db) == 2);
+    auto v2 = parse_schema("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);");
+    auto current = extract_schema(db.db);
+    apply_plan(db.db, diff_schemas(current, v2));
+    CHECK(migration_ver(db.db) == 2);
 }
 
 TEST_CASE("migration_version survives no-op apply") {
-    Database db(":memory:");
+    TestDB db;
 
-    Schema v1 = parse("CREATE TABLE users (id INTEGER PRIMARY KEY);");
-    apply(db, diff(Schema{}, v1));
-    CHECK(migration_version(db) == 1);
+    auto v1 = parse_schema("CREATE TABLE users (id INTEGER PRIMARY KEY);");
+    apply_plan(db.db, diff_schemas(empty_schema(), v1));
+    CHECK(migration_ver(db.db) == 1);
 
     // No-op (same schema) — should not increment
-    Schema current = extract(db);
-    auto plan = diff(current, v1);
-    CHECK(plan.empty());
+    auto current = extract_schema(db.db);
+    auto plan_str = diff_schemas(current, v1);
+    CHECK(json::parse(plan_str)["operations"].empty());
     // Version unchanged since apply() returns early for empty plans
-    CHECK(migration_version(db) == 1);
+    CHECK(migration_ver(db.db) == 1);
 }
 
 TEST_CASE("apply detects drift") {
-    Database db(":memory:");
+    TestDB db;
 
     // First migration
-    Schema v1 = parse("CREATE TABLE users (id INTEGER PRIMARY KEY);");
-    apply(db, diff(Schema{}, v1));
+    auto v1 = parse_schema("CREATE TABLE users (id INTEGER PRIMARY KEY);");
+    apply_plan(db.db, diff_schemas(empty_schema(), v1));
 
     // Modify schema outside sqlift
     db.exec("ALTER TABLE users ADD COLUMN sneaky TEXT;");
 
     // Try to apply another migration
-    Schema v2 = parse("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);");
-    Schema current = extract(db);
-    auto plan = diff(current, v2);
+    auto v2 = parse_schema("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);");
+    auto current = extract_schema(db.db);
+    auto plan_str = diff_schemas(current, v2);
 
-    CHECK_THROWS_AS(apply(db, plan, {.allow_destructive = true}), DriftError);
+    CHECK(apply_err(db.db, plan_str, true) == SQLIFT_DRIFT_ERROR);
 }
