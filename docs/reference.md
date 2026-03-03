@@ -1,44 +1,193 @@
-# C++ API Reference
+# C API Reference
 
-All types and functions live in the `sqlift` namespace. Include `"sqlift.h"` to
-access everything.
+Include `"sqlift.h"` to access the complete API. All functions use `extern "C"`
+linkage. Data interchange is JSON strings -- callers must free returned strings
+with `sqlift_free()`.
 
 For the Go API, see [Go API Reference](reference-go.md). For conceptual
 background, see [Guide](guide.md).
 
-## Core functions
+## Version macros
 
-### `parse`
-
-```cpp
-Schema parse(const std::string& sql);
-```
-
-Parse SQL DDL statements into a `Schema`. Internally creates a `:memory:`
-SQLite database, executes the SQL, and extracts the resulting schema.
-
-**Parameters:**
-- `sql` -- one or more DDL statements (`CREATE TABLE`, `CREATE INDEX`,
-  `CREATE VIEW`, `CREATE TRIGGER`). Statements are separated by semicolons.
-
-**Returns:** a `Schema` representing the declared objects.
-
-**Throws:** `ParseError` if the SQL is invalid.
-
-**Example:**
-```cpp
-auto schema = sqlift::parse(
-    "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL);"
-    "CREATE INDEX idx_name ON users(name);"
-);
+```c
+#define SQLIFT_VERSION       "0.11.0"
+#define SQLIFT_VERSION_MAJOR 0
+#define SQLIFT_VERSION_MINOR 11
+#define SQLIFT_VERSION_PATCH 0
 ```
 
 ---
 
-### `extract`
+## Error codes
 
-```cpp
-Schema extract(sqlite3* db);
+All functions report errors via an `int* err_type` output parameter. On
+success, `*err_type` is set to `SQLIFT_OK`. On failure, it is set to one of:
+
+```c
+enum sqlift_error_type {
+    SQLIFT_OK                    = 0,
+    SQLIFT_ERROR                 = 1,
+    SQLIFT_PARSE_ERROR           = 2,
+    SQLIFT_EXTRACT_ERROR         = 3,
+    SQLIFT_DIFF_ERROR            = 4,
+    SQLIFT_APPLY_ERROR           = 5,
+    SQLIFT_DRIFT_ERROR           = 6,
+    SQLIFT_DESTRUCTIVE_ERROR     = 7,
+    SQLIFT_BREAKING_CHANGE_ERROR = 8,
+    SQLIFT_JSON_ERROR            = 9,
+};
+```
+
+When an error occurs, the accompanying `char** err_msg` output is set to a
+heap-allocated string describing the failure. The caller must free it with
+`sqlift_free()`.
+
+| Code | Meaning |
+|------|---------|
+| `SQLIFT_OK` | Success |
+| `SQLIFT_ERROR` | General error (e.g. SQLite failure) |
+| `SQLIFT_PARSE_ERROR` | Invalid DDL passed to `sqlift_parse()` |
+| `SQLIFT_EXTRACT_ERROR` | Schema extraction from a live database failed |
+| `SQLIFT_DIFF_ERROR` | Internal error during schema comparison |
+| `SQLIFT_APPLY_ERROR` | SQL execution failed during `sqlift_apply()` (e.g. FK violation) |
+| `SQLIFT_DRIFT_ERROR` | Schema was modified outside sqlift since the last `sqlift_apply()` |
+| `SQLIFT_DESTRUCTIVE_ERROR` | Plan has destructive operations and `allow_destructive` is 0 |
+| `SQLIFT_BREAKING_CHANGE_ERROR` | Schema change depends on existing data (see [Breaking change detection](guide.md#breaking-change-detection)) |
+| `SQLIFT_JSON_ERROR` | Invalid JSON or missing fields in plan JSON |
+
+---
+
+## Database handle
+
+### `sqlift_db_open`
+
+```c
+sqlift_db* sqlift_db_open(const char* path, int flags,
+                          int* err_type, char** err_msg);
+```
+
+Open a SQLite database and return an opaque handle.
+
+**Parameters:**
+- `path` -- database file path. Use `":memory:"` for an in-memory database.
+- `flags` -- SQLite open flags. Pass 0 for the default
+  (`SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE`).
+- `err_type` -- receives the error code on failure.
+- `err_msg` -- receives a heap-allocated error message on failure (free with
+  `sqlift_free()`).
+
+**Returns:** an opaque `sqlift_db*` handle, or `NULL` on error.
+
+---
+
+### `sqlift_db_close`
+
+```c
+void sqlift_db_close(sqlift_db* db);
+```
+
+Close a database handle and release its resources. Safe to call with `NULL`.
+
+---
+
+### `sqlift_db_exec`
+
+```c
+int sqlift_db_exec(sqlift_db* db, const char* sql, char** err_msg);
+```
+
+Execute one or more SQL statements with no result rows.
+
+**Parameters:**
+- `db` -- an open database handle.
+- `sql` -- SQL to execute.
+- `err_msg` -- receives a heap-allocated error message on failure (free with
+  `sqlift_free()`).
+
+**Returns:** 0 on success, non-zero on error.
+
+---
+
+### `sqlift_db_query_int64`
+
+```c
+int sqlift_db_query_int64(sqlift_db* db, const char* sql,
+                          int64_t* result, char** err_msg);
+```
+
+Execute a query that returns a single `int64` value.
+
+**Parameters:**
+- `db` -- an open database handle.
+- `sql` -- a SQL query returning one row with one integer column.
+- `result` -- receives the value.
+- `err_msg` -- receives a heap-allocated error message on failure.
+
+**Returns:** 0 on success, non-zero on error.
+
+---
+
+### `sqlift_db_query_text`
+
+```c
+char* sqlift_db_query_text(sqlift_db* db, const char* sql, char** err_msg);
+```
+
+Execute a query that returns a single text value.
+
+**Parameters:**
+- `db` -- an open database handle.
+- `sql` -- a SQL query returning one row with one text column.
+- `err_msg` -- receives a heap-allocated error message on failure.
+
+**Returns:** a heap-allocated string (free with `sqlift_free()`), or `NULL` on
+error. Returns an empty string if the query produces no rows.
+
+---
+
+## Core functions
+
+### `sqlift_parse`
+
+```c
+char* sqlift_parse(const char* ddl, int* err_type, char** err_msg);
+```
+
+Parse SQL DDL statements into a schema. Internally creates a `:memory:` SQLite
+database, executes the DDL, and extracts the resulting schema.
+
+**Parameters:**
+- `ddl` -- one or more DDL statements (`CREATE TABLE`, `CREATE INDEX`,
+  `CREATE VIEW`, `CREATE TRIGGER`). Statements are separated by semicolons.
+- `err_type` -- receives `SQLIFT_PARSE_ERROR` on failure.
+- `err_msg` -- receives a heap-allocated error message on failure.
+
+**Returns:** a heap-allocated JSON string representing the schema (see
+[Schema JSON format](#schema-json-format)), or `NULL` on error. Free with
+`sqlift_free()`.
+
+**Example:**
+```c
+int err_type;
+char* err_msg = NULL;
+char* schema = sqlift_parse(
+    "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL);"
+    "CREATE INDEX idx_name ON users(name);",
+    &err_type, &err_msg);
+if (!schema) {
+    fprintf(stderr, "Parse error: %s\n", err_msg);
+    sqlift_free(err_msg);
+}
+// ... use schema ...
+sqlift_free(schema);
+```
+
+---
+
+### `sqlift_extract`
+
+```c
+char* sqlift_extract(sqlift_db* db, int* err_type, char** err_msg);
 ```
 
 Extract the current schema from a live SQLite database by querying
@@ -47,38 +196,102 @@ Extract the current schema from a live SQLite database by querying
 The `_sqlift_state` table and `sqlite_autoindex_*` entries are excluded.
 
 **Parameters:**
-- `db` -- an open SQLite database handle.
+- `db` -- an open database handle.
+- `err_type` -- receives `SQLIFT_EXTRACT_ERROR` on failure.
+- `err_msg` -- receives a heap-allocated error message on failure.
 
-**Returns:** a `Schema` representing the current database objects.
-
-**Throws:** `ExtractError` on failure.
+**Returns:** a heap-allocated JSON string representing the schema, or `NULL` on
+error. Free with `sqlift_free()`.
 
 ---
 
-### `diff`
+### `sqlift_diff`
 
-```cpp
-MigrationPlan diff(const Schema& current, const Schema& desired);
+```c
+char* sqlift_diff(const char* current_json, const char* desired_json,
+                  int* err_type, char** err_msg);
 ```
 
 Compare two schemas and produce a migration plan. This is a pure function -- it
 does not access any database.
 
 **Parameters:**
-- `current` -- the schema as it exists now (typically from `extract()`).
-- `desired` -- the schema you want (typically from `parse()`).
+- `current_json` -- schema JSON as it exists now (typically from
+  `sqlift_extract()`).
+- `desired_json` -- schema JSON you want (typically from `sqlift_parse()`).
+- `err_type` -- receives `SQLIFT_DIFF_ERROR` or `SQLIFT_BREAKING_CHANGE_ERROR`
+  on failure.
+- `err_msg` -- receives a heap-allocated error message on failure.
 
-**Returns:** a `MigrationPlan` containing the operations needed to transform
-`current` into `desired`. Returns an empty plan if the schemas are identical.
-Any redundant indexes in the desired schema are reported via
-`plan.warnings()`.
+**Returns:** a heap-allocated JSON string representing the migration plan (see
+[Plan JSON format](#plan-json-format)), or `NULL` on error. Free with
+`sqlift_free()`.
+
+Returns a plan with an empty `operations` array if the schemas are identical.
+Any redundant indexes in the desired schema are reported in the plan's
+`warnings` array.
 
 ---
 
-### `detect_redundant_indexes`
+### `sqlift_apply`
 
-```cpp
-std::vector<Warning> detect_redundant_indexes(const Schema& schema);
+```c
+int sqlift_apply(sqlift_db* db, const char* plan_json, int allow_destructive,
+                 int* err_type, char** err_msg);
+```
+
+Execute a migration plan against a live database.
+
+**Parameters:**
+- `db` -- an open database handle.
+- `plan_json` -- the plan JSON to execute (from `sqlift_diff()` or
+  deserialized).
+- `allow_destructive` -- if 0, returns `SQLIFT_DESTRUCTIVE_ERROR` when the plan
+  contains destructive operations. Set to non-zero to permit drops.
+- `err_type` -- receives the error code on failure.
+- `err_msg` -- receives a heap-allocated error message on failure.
+
+**Returns:** 0 on success, non-zero on error.
+
+**Possible errors:**
+- `SQLIFT_DESTRUCTIVE_ERROR` if the plan contains destructive operations and
+  `allow_destructive` is 0.
+- `SQLIFT_DRIFT_ERROR` if the database schema has been modified since the last
+  `sqlift_apply()` (detected via stored hash in `_sqlift_state`).
+- `SQLIFT_APPLY_ERROR` if any SQL statement fails during execution (e.g. a
+  foreign key check violation during a table rebuild).
+
+After successful execution, updates the schema hash and increments the
+migration version counter in `_sqlift_state`.
+
+---
+
+## Utility functions
+
+### `sqlift_migration_version`
+
+```c
+int64_t sqlift_migration_version(sqlift_db* db, int* err_type, char** err_msg);
+```
+
+Return the migration version counter. Starts at 0 (no migrations have run) and
+increments by 1 each time `sqlift_apply()` executes a non-empty plan.
+
+**Parameters:**
+- `db` -- an open database handle.
+- `err_type` -- receives the error code on failure.
+- `err_msg` -- receives a heap-allocated error message on failure.
+
+**Returns:** the current migration version (0 if no migrations have been
+applied).
+
+---
+
+### `sqlift_detect_redundant_indexes`
+
+```c
+char* sqlift_detect_redundant_indexes(const char* schema_json,
+                                      int* err_type, char** err_msg);
 ```
 
 Analyse a schema for redundant indexes. Detects two kinds:
@@ -89,355 +302,190 @@ Analyse a schema for redundant indexes. Detects two kinds:
   `PRIMARY KEY` columns (non-unique), or an exact match (even if unique, since
   the PK already implies uniqueness).
 
-`diff()` calls this on the desired schema automatically, but it is also
+`sqlift_diff()` calls this on the desired schema automatically, but it is also
 available as a standalone function for direct schema analysis.
 
+**Parameters:**
+- `schema_json` -- schema JSON string.
+- `err_type` -- receives the error code on failure.
+- `err_msg` -- receives a heap-allocated error message on failure.
+
+**Returns:** a heap-allocated JSON array of warnings (see
+[Warning JSON format](#warning-json-format)), or `NULL` on error. Free with
+`sqlift_free()`.
+
 ---
 
-### `apply`
+### `sqlift_schema_hash`
 
-```cpp
-void apply(sqlite3* db, const MigrationPlan& plan,
-           const ApplyOptions& opts = {});
+```c
+char* sqlift_schema_hash(const char* schema_json,
+                         int* err_type, char** err_msg);
 ```
 
-Execute a migration plan against a live database.
+Compute a deterministic SHA-256 hash of a schema. Used internally for drift
+detection; also available for cross-language hash verification.
 
 **Parameters:**
-- `db` -- an open SQLite database handle.
-- `plan` -- the plan to execute.
-- `opts` -- options controlling behaviour (see `ApplyOptions`).
+- `schema_json` -- schema JSON string.
+- `err_type` -- receives the error code on failure.
+- `err_msg` -- receives a heap-allocated error message on failure.
 
-**Throws:**
-- `DestructiveError` if the plan contains destructive operations and
-  `opts.allow_destructive` is `false`.
-- `DriftError` if the database schema has been modified since the last
-  `apply()` (detected via stored hash in `_sqlift_state`).
-- `ApplyError` if any SQL statement fails during execution (e.g. a foreign key
-  check violation during a table rebuild).
-
-After successful execution, updates the schema hash and increments the
-migration version counter in `_sqlift_state`.
+**Returns:** a heap-allocated hex-encoded SHA-256 hash string, or `NULL` on
+error. Free with `sqlift_free()`.
 
 ---
 
-### `migration_version`
+## Memory management
 
-```cpp
-int64_t migration_version(sqlite3* db);
+### `sqlift_free`
+
+```c
+void sqlift_free(void* ptr);
 ```
 
-Return the migration version counter. Starts at 0 (no migrations have run) and
-increments by 1 each time `apply()` executes a non-empty plan.
+Free any heap-allocated string or buffer returned by the C API. This includes
+return values from `sqlift_parse()`, `sqlift_extract()`, `sqlift_diff()`,
+`sqlift_detect_redundant_indexes()`, `sqlift_schema_hash()`,
+`sqlift_db_query_text()`, and error messages.
 
-**Parameters:**
-- `db` -- an open SQLite database handle.
-
-**Returns:** the current migration version (0 if no migrations have been applied).
+Safe to call with `NULL`.
 
 ---
 
-## Types
+## JSON data formats
 
-### `Schema`
+All data interchange between the caller and the C API uses JSON strings.
 
-```cpp
-struct Schema {
-    std::map<std::string, Table>   tables;
-    std::map<std::string, Index>   indexes;
-    std::map<std::string, View>    views;
-    std::map<std::string, Trigger> triggers;
+### Schema JSON format
 
-    bool operator==(const Schema&) const = default;
-    std::string hash() const;
-};
+Returned by `sqlift_parse()` and `sqlift_extract()`. Accepted by
+`sqlift_diff()`, `sqlift_detect_redundant_indexes()`, and
+`sqlift_schema_hash()`.
+
+```json
+{
+  "tables": {
+    "users": {
+      "name": "users",
+      "columns": [
+        {
+          "name": "id",
+          "type": "INTEGER",
+          "notnull": false,
+          "default_value": "",
+          "pk": 1,
+          "collation": "",
+          "generated": 0,
+          "generated_expr": ""
+        }
+      ],
+      "foreign_keys": [
+        {
+          "constraint_name": "",
+          "from_columns": ["user_id"],
+          "to_table": "users",
+          "to_columns": ["id"],
+          "on_update": "NO ACTION",
+          "on_delete": "CASCADE"
+        }
+      ],
+      "check_constraints": [
+        {
+          "name": "",
+          "expression": "price > 0"
+        }
+      ],
+      "pk_constraint_name": "",
+      "without_rowid": false,
+      "strict": false,
+      "raw_sql": "CREATE TABLE users (...)"
+    }
+  },
+  "indexes": {
+    "idx_name": {
+      "name": "idx_name",
+      "table_name": "users",
+      "columns": ["name"],
+      "unique": false,
+      "where_clause": "",
+      "raw_sql": "CREATE INDEX idx_name ON users(name)"
+    }
+  },
+  "views": {
+    "recent_posts": {
+      "name": "recent_posts",
+      "sql": "CREATE VIEW recent_posts AS ..."
+    }
+  },
+  "triggers": {
+    "on_delete": {
+      "name": "on_delete",
+      "table_name": "users",
+      "sql": "CREATE TRIGGER on_delete ..."
+    }
+  }
+}
 ```
 
-A complete representation of a SQLite database schema. Maps are keyed by object
-name and sorted lexicographically for deterministic iteration.
+**Column fields:**
 
-`hash()` returns a hex-encoded SHA-256 hash of a deterministic serialization of
-the schema. Used internally for drift detection.
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Column name |
+| `type` | string | Uppercase type (e.g. `"INTEGER"`, `"TEXT"`). Empty if untyped. |
+| `notnull` | bool | Whether the column has a NOT NULL constraint |
+| `default_value` | string | Raw SQL expression (e.g. `"0"`, `"'hello'"`). Empty if none. |
+| `pk` | int | 0 = not primary key. 1+ = position in composite PK. |
+| `collation` | string | e.g. `"NOCASE"`. Empty = default (BINARY). |
+| `generated` | int | 0 = normal, 2 = virtual, 3 = stored |
+| `generated_expr` | string | e.g. `"first_name \|\| ' ' \|\| last_name"`. Empty if not generated. |
 
----
+**Table fields:**
 
-### `Table`
-
-```cpp
-struct Table {
-    std::string name;
-    std::vector<Column> columns;                    // Ordered by column ID.
-    std::vector<ForeignKey> foreign_keys;
-    std::vector<CheckConstraint> check_constraints;
-    std::string pk_constraint_name;                 // Empty if unnamed.
-    bool without_rowid = false;
-    bool strict = false;
-    std::string raw_sql;                            // Original CREATE TABLE from sqlite_master.
-};
-```
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Table name |
+| `columns` | array | Ordered by column ID |
+| `foreign_keys` | array | Foreign key constraints |
+| `check_constraints` | array | CHECK constraints |
+| `pk_constraint_name` | string | Empty if unnamed (cosmetic only) |
+| `without_rowid` | bool | `WITHOUT ROWID` table option |
+| `strict` | bool | `STRICT` table option |
+| `raw_sql` | string | Original `CREATE TABLE` from `sqlite_master` |
 
 Equality comparison is structural -- it compares `name`, `columns`,
 `foreign_keys`, `check_constraints`, `without_rowid`, and `strict`. The
 `raw_sql` and `pk_constraint_name` fields are excluded from equality (cosmetic
-only) but included in `Schema::hash()`.
+only) but included in `sqlift_schema_hash()`.
 
-`raw_sql` is used during table rebuilds to reconstruct the desired table
-structure.
+**Foreign key fields:**
 
----
+| Field | Type | Description |
+|-------|------|-------------|
+| `constraint_name` | string | Empty if unnamed (cosmetic only, excluded from equality) |
+| `from_columns` | array | Source columns |
+| `to_table` | string | Referenced table |
+| `to_columns` | array | Referenced columns |
+| `on_update` | string | `"NO ACTION"`, `"CASCADE"`, `"SET NULL"`, etc. |
+| `on_delete` | string | `"NO ACTION"`, `"CASCADE"`, `"SET NULL"`, etc. |
 
-### `GeneratedType`
+**Index fields:**
 
-```cpp
-enum class GeneratedType {
-    Normal  = 0,   // Not a generated column.
-    Virtual = 2,   // GENERATED ALWAYS AS (...) VIRTUAL
-    Stored  = 3,   // GENERATED ALWAYS AS (...) STORED
-};
-```
-
-Values match SQLite's `table_xinfo` hidden field.
-
----
-
-### `Column`
-
-```cpp
-struct Column {
-    std::string name;
-    std::string type;            // Uppercase (e.g. "INTEGER", "TEXT"). Empty if untyped.
-    bool notnull = false;
-    std::string default_value;   // Raw SQL expression (e.g. "0", "'hello'"). Empty if none.
-    int pk = 0;                  // 0 = not primary key. 1+ = position in composite PK.
-    std::string collation;       // e.g. "NOCASE". Empty = default (BINARY).
-    GeneratedType generated = GeneratedType::Normal;
-    std::string generated_expr;  // e.g. "first_name || ' ' || last_name". Empty if not generated.
-};
-```
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Index name |
+| `table_name` | string | Table the index belongs to |
+| `columns` | array | Indexed columns |
+| `unique` | bool | Whether the index enforces uniqueness |
+| `where_clause` | string | Partial index `WHERE` clause. Empty if not partial. |
+| `raw_sql` | string | Original `CREATE INDEX` from `sqlite_master` (excluded from equality) |
 
 ---
 
-### `CheckConstraint`
+### Plan JSON format
 
-```cpp
-struct CheckConstraint {
-    std::string name;        // Empty if unnamed.
-    std::string expression;  // e.g. "age > 0"
-};
-```
-
----
-
-### `ForeignKey`
-
-```cpp
-struct ForeignKey {
-    std::string constraint_name;                    // Empty if unnamed.
-    std::vector<std::string> from_columns;
-    std::string to_table;
-    std::vector<std::string> to_columns;
-    std::string on_update = "NO ACTION";
-    std::string on_delete = "NO ACTION";
-};
-```
-
-Supports composite foreign keys. `on_update` and `on_delete` are stored
-uppercase (e.g. `"CASCADE"`, `"SET NULL"`, `"NO ACTION"`). `constraint_name`
-is excluded from equality (cosmetic only) but included in `Schema::hash()`.
-
----
-
-### `Index`
-
-```cpp
-struct Index {
-    std::string name;
-    std::string table_name;
-    std::vector<std::string> columns;
-    bool unique = false;
-    std::string where_clause;  // Partial index WHERE clause. Empty if not partial.
-    std::string raw_sql;       // Original CREATE INDEX from sqlite_master.
-};
-```
-
-Equality comparison is structural -- excludes `raw_sql`.
-
----
-
-### `View`
-
-```cpp
-struct View {
-    std::string name;
-    std::string sql;  // Full CREATE VIEW statement as normalized by SQLite.
-};
-```
-
----
-
-### `Trigger`
-
-```cpp
-struct Trigger {
-    std::string name;
-    std::string table_name;
-    std::string sql;  // Full CREATE TRIGGER statement as normalized by SQLite.
-};
-```
-
----
-
-### `MigrationPlan`
-
-```cpp
-class MigrationPlan {
-public:
-    const std::vector<Operation>& operations() const;
-    const std::vector<Warning>& warnings() const;
-    bool has_destructive_operations() const;
-    bool empty() const;
-};
-```
-
-An ordered sequence of operations produced by `diff()`. The plan is immutable
-once created.
-
-- `operations()` -- returns the full list of operations in execution order.
-- `warnings()` -- returns any schema warnings (e.g. redundant indexes).
-- `has_destructive_operations()` -- returns `true` if any operation has
-  `destructive == true`.
-- `empty()` -- returns `true` if there are no operations (schemas are
-  identical).
-
----
-
-### `Operation`
-
-```cpp
-struct Operation {
-    OpType type;
-    std::string object_name;
-    std::string description;
-    std::vector<std::string> sql;
-    bool destructive = false;
-};
-```
-
-A single migration step.
-
-- `type` -- the kind of operation (see `OpType`).
-- `object_name` -- the table, index, view, or trigger name.
-- `description` -- human-readable summary (e.g. `"Add column email to users"`).
-- `sql` -- ordered list of SQL statements to execute. For simple operations
-  this is a single statement; for `RebuildTable` it contains the full 12-step
-  sequence.
-- `destructive` -- `true` if this operation drops data.
-
----
-
-### `WarningType`
-
-```cpp
-enum class WarningType {
-    RedundantIndex,
-};
-```
-
----
-
-### `Warning`
-
-```cpp
-struct Warning {
-    WarningType type;
-    std::string message;
-    std::string index_name;
-    std::string covered_by;
-    std::string table_name;
-};
-```
-
-A non-fatal issue detected in the desired schema.
-
-- `type` -- the kind of warning (currently only `RedundantIndex`).
-- `message` -- human-readable description.
-- `index_name` -- the redundant index.
-- `covered_by` -- the covering index name, or `"PRIMARY KEY"`.
-- `table_name` -- the table both indexes belong to.
-
----
-
-### `OpType`
-
-```cpp
-enum class OpType {
-    CreateTable,
-    DropTable,
-    RebuildTable,
-    AddColumn,
-    CreateIndex,
-    DropIndex,
-    CreateView,
-    DropView,
-    CreateTrigger,
-    DropTrigger,
-};
-```
-
----
-
-### `ApplyOptions`
-
-```cpp
-struct ApplyOptions {
-    bool allow_destructive = false;
-};
-```
-
-- `allow_destructive` -- if `false` (default), `apply()` throws
-  `DestructiveError` when the plan contains destructive operations. Set to
-  `true` to permit dropping tables, columns, and indexes.
-
----
-
-## JSON serialization
-
-### `to_string(OpType)`
-
-```cpp
-std::string to_string(OpType type);
-```
-
-Convert an `OpType` value to its string representation. The string matches the
-enumerator name in PascalCase (e.g. `OpType::CreateTable` -> `"CreateTable"`).
-
-**Throws:** `JsonError` if the value is not a recognized `OpType`.
-
----
-
-### `op_type_from_string`
-
-```cpp
-OpType op_type_from_string(const std::string& s);
-```
-
-Parse a string into an `OpType`. Case-sensitive; must match an enumerator name
-exactly.
-
-**Throws:** `JsonError` if the string is not recognized.
-
----
-
-### `to_json`
-
-```cpp
-std::string to_json(const MigrationPlan& plan);
-```
-
-Serialize a `MigrationPlan` to a JSON string. Produces a pretty-printed JSON
-object with 2-space indentation.
-
-**Returns:** a JSON string with this structure:
+Returned by `sqlift_diff()`. Accepted by `sqlift_apply()`.
 
 ```json
 {
@@ -447,115 +495,47 @@ object with 2-space indentation.
       "type": "CreateTable",
       "object_name": "users",
       "description": "Create table users",
-      "sql": ["CREATE TABLE ..."],
+      "sql": ["CREATE TABLE users (...)"],
       "destructive": false
+    }
+  ],
+  "warnings": [
+    {
+      "type": "RedundantIndex",
+      "message": "index idx_name is a prefix duplicate of idx_name_email",
+      "index_name": "idx_name",
+      "covered_by": "idx_name_email",
+      "table_name": "users"
     }
   ]
 }
 ```
 
----
+**Operation fields:**
 
-### `from_json`
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | string | Operation type (see below) |
+| `object_name` | string | The table, index, view, or trigger name |
+| `description` | string | Human-readable summary |
+| `sql` | array | SQL statements to execute (in order) |
+| `destructive` | bool | Whether this operation drops data |
 
-```cpp
-MigrationPlan from_json(const std::string& json_str);
-```
-
-Deserialize a `MigrationPlan` from a JSON string. All fields in each operation
-are required. Unknown fields are ignored.
-
-**Throws:** `JsonError` on any parsing or validation failure (invalid JSON,
-missing fields, unknown `OpType`, unsupported version).
-
-The deserialized plan can be passed directly to `apply()`.
+**Operation types:** `CreateTable`, `DropTable`, `RebuildTable`, `AddColumn`,
+`CreateIndex`, `DropIndex`, `CreateView`, `DropView`, `CreateTrigger`,
+`DropTrigger`.
 
 ---
 
-## Exceptions
+### Warning JSON format
 
-All exceptions inherit from `sqlift::Error`, which inherits from
-`std::runtime_error`.
+Returned in the plan's `warnings` array and by
+`sqlift_detect_redundant_indexes()`.
 
-```
-std::runtime_error
-  sqlift::Error
-    sqlift::ParseError
-    sqlift::ExtractError
-    sqlift::DiffError
-    sqlift::ApplyError
-    sqlift::DriftError
-    sqlift::DestructiveError
-    sqlift::BreakingChangeError
-    sqlift::JsonError
-```
-
-- `BreakingChangeError` -- thrown by `diff()` when the desired schema contains
-  changes whose success depends on existing data. Detected cases: existing
-  nullable column becomes NOT NULL, new FK constraint on existing table, new
-  CHECK constraint on existing table, new NOT NULL column without DEFAULT.
-
----
-
-## Utility classes
-
-### `Database`
-
-```cpp
-class Database {
-public:
-    explicit Database(const std::string& path,
-                      int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
-    ~Database();
-
-    Database(Database&&) noexcept;
-    Database& operator=(Database&&) noexcept;
-
-    sqlite3* get() const;
-    operator sqlite3*() const;
-
-    void exec(const std::string& sql);
-};
-```
-
-RAII wrapper for `sqlite3*`. Opens the database on construction, closes on
-destruction. Move-only.
-
-- `get()` / `operator sqlite3*()` -- access the underlying handle. The
-  implicit conversion allows passing a `Database` directly to any function
-  expecting `sqlite3*`.
-- `exec(sql)` -- execute SQL with no result rows. Throws `Error` on failure.
-
----
-
-### `Statement`
-
-```cpp
-class Statement {
-public:
-    Statement(sqlite3* db, const std::string& sql);
-    ~Statement();
-
-    Statement(Statement&&) noexcept;
-    Statement& operator=(Statement&&) noexcept;
-
-    bool step();
-
-    int64_t column_int(int col) const;
-    std::string column_text(int col) const;
-
-    void bind_text(int param, const std::string& value);
-    void bind_int(int param, int64_t value);
-
-    sqlite3_stmt* get() const;
-};
-```
-
-RAII wrapper for `sqlite3_stmt*`. Prepares on construction, finalizes on
-destruction. Move-only.
-
-- `step()` -- advance the statement. Returns `true` if a row is available
-  (`SQLITE_ROW`), `false` if done (`SQLITE_DONE`). Throws `Error` on failure.
-- `column_int(col)` / `column_text(col)` -- read column values (0-indexed).
-- `bind_text(param, value)` / `bind_int(param, value)` -- bind parameters
-  (1-indexed).
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | string | Warning type (currently only `"RedundantIndex"`) |
+| `message` | string | Human-readable description |
+| `index_name` | string | The redundant index |
+| `covered_by` | string | The covering index name, or `"PRIMARY KEY"` |
+| `table_name` | string | The table both indexes belong to |

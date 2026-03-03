@@ -8,27 +8,22 @@ The central idea is that you maintain **one canonical DDL file** describing the 
 
 See the README for installation instructions. Once sqlift is available, the minimal boilerplate to open a database and import the library looks like this:
 
-**C++:**
-```cpp
+**C:**
+```c
 #include "sqlift.h"
-#include <sqlite3.h>
 
-sqlift::Database db("taskflow.db");
-// db.get() returns the underlying sqlite3*
+int err_type;
+char* err_msg = NULL;
+sqlift_db* db = sqlift_db_open("taskflow.db", 0, &err_type, &err_msg);
+// use db with sqlift functions
+sqlift_db_close(db);
 ```
 
 **Go:**
 ```go
-import (
-    "context"
-    "database/sql"
-    "fmt"
+import "github.com/marcelocantos/sqlift/go/sqlift"
 
-    _ "github.com/mattn/go-sqlite3"
-    "github.com/marcelocantos/sqlift/go/sqlift"
-)
-
-db, err := sql.Open("sqlite3", "taskflow.db")
+db, err := sqlift.Open("taskflow.db")
 if err != nil {
     // handle error
 }
@@ -61,41 +56,42 @@ CREATE INDEX idx_tasks_user ON tasks(user_id);
 
 The workflow is always the same four steps: **parse** the desired DDL, **extract** the current schema from the live database, **diff** the two, and **apply** the plan. Here is the full implementation for both languages:
 
-**C++:**
-```cpp
+**C:**
+```c
 #include "sqlift.h"
-#include <iostream>
+#include <stdio.h>
 
-const std::string kSchema = R"sql(
-CREATE TABLE users (
-    id INTEGER PRIMARY KEY,
-    username TEXT NOT NULL UNIQUE,
-    email TEXT NOT NULL
-);
+static const char* kSchema =
+    "CREATE TABLE users ("
+    "    id INTEGER PRIMARY KEY,"
+    "    username TEXT NOT NULL UNIQUE,"
+    "    email TEXT NOT NULL"
+    ");"
+    "CREATE TABLE tasks ("
+    "    id INTEGER PRIMARY KEY,"
+    "    title TEXT NOT NULL,"
+    "    description TEXT,"
+    "    user_id INTEGER NOT NULL REFERENCES users(id),"
+    "    created_at TEXT NOT NULL DEFAULT (datetime('now'))"
+    ");"
+    "CREATE INDEX idx_tasks_user ON tasks(user_id);";
 
-CREATE TABLE tasks (
-    id INTEGER PRIMARY KEY,
-    title TEXT NOT NULL,
-    description TEXT,
-    user_id INTEGER NOT NULL REFERENCES users(id),
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
+void migrate(sqlift_db* db) {
+    int err_type;
+    char* err_msg = NULL;
 
-CREATE INDEX idx_tasks_user ON tasks(user_id);
-)sql";
+    char* desired = sqlift_parse(kSchema, &err_type, &err_msg);
+    char* current = sqlift_extract(db, &err_type, &err_msg);
+    char* plan = sqlift_diff(current, desired, &err_type, &err_msg);
 
-void migrate(sqlite3* db) {
-    sqlift::Schema desired = sqlift::parse(kSchema);
-    sqlift::Schema current = sqlift::extract(db);
-    sqlift::MigrationPlan plan = sqlift::diff(current, desired);
+    // The plan is a JSON string -- print it to inspect operations.
+    printf("%s\n", plan);
 
-    // Inspect the plan before applying.
-    for (const auto& op : plan.operations()) {
-        std::cout << sqlift::to_string(op.type)
-                  << " " << op.object_name << "\n";
-    }
+    sqlift_apply(db, plan, 0, &err_type, &err_msg);
 
-    sqlift::apply(db, plan);
+    sqlift_free(plan);
+    sqlift_free(current);
+    sqlift_free(desired);
 }
 ```
 
@@ -119,13 +115,13 @@ CREATE TABLE tasks (
 CREATE INDEX idx_tasks_user ON tasks(user_id);
 `
 
-func migrate(ctx context.Context, db *sql.DB) error {
+func migrate(db *sqlift.Database) error {
     desired, err := sqlift.Parse(schema)
     if err != nil {
         return err
     }
 
-    current, err := sqlift.Extract(ctx, db)
+    current, err := sqlift.Extract(db)
     if err != nil {
         return err
     }
@@ -140,7 +136,7 @@ func migrate(ctx context.Context, db *sql.DB) error {
         fmt.Printf("%s %s\n", op.Type, op.ObjectName)
     }
 
-    return sqlift.Apply(ctx, db, plan, sqlift.ApplyOptions{})
+    return sqlift.Apply(db, plan, sqlift.ApplyOptions{})
 }
 ```
 
@@ -229,13 +225,13 @@ sqlift applies operations in a fixed order that keeps the database consistent: d
 
 The data team wants `description` to be mandatory. You update the column definition to `description TEXT NOT NULL`. When you call `Diff`, you get an error before any database is touched:
 
-**C++:**
-```cpp
-try {
-    auto plan = sqlift::diff(current, desired);
-} catch (const sqlift::BreakingChangeError& e) {
-    std::cerr << "Breaking change: " << e.what() << "\n";
+**C:**
+```c
+char* plan = sqlift_diff(current, desired, &err_type, &err_msg);
+if (err_type == SQLIFT_BREAKING_CHANGE_ERROR) {
+    fprintf(stderr, "Breaking change: %s\n", err_msg);
     // Breaking change: column tasks.description: nullable -> NOT NULL
+    sqlift_free(err_msg);
 }
 ```
 
@@ -279,21 +275,22 @@ RebuildTable tasks  (destructive)
 
 Calling `Apply` without opting in raises a guard error:
 
-**C++:**
-```cpp
-try {
-    sqlift::apply(db, plan); // default opts: allow_destructive = false
-} catch (const sqlift::DestructiveError& e) {
-    std::cerr << "Destructive: " << e.what() << "\n";
+**C:**
+```c
+// Returns SQLIFT_DESTRUCTIVE_ERROR if the plan drops anything
+sqlift_apply(db, plan, /*allow_destructive=*/0, &err_type, &err_msg);
+if (err_type == SQLIFT_DESTRUCTIVE_ERROR) {
+    fprintf(stderr, "Destructive: %s\n", err_msg);
+    sqlift_free(err_msg);
 }
 
 // Opt in explicitly:
-sqlift::apply(db, plan, sqlift::ApplyOptions{.allow_destructive = true});
+sqlift_apply(db, plan, /*allow_destructive=*/1, &err_type, &err_msg);
 ```
 
 **Go:**
 ```go
-err = sqlift.Apply(ctx, db, plan, sqlift.ApplyOptions{})
+err = sqlift.Apply(db, plan, sqlift.ApplyOptions{})
 if err != nil {
     var de *sqlift.DestructiveError
     if errors.As(err, &de) {
@@ -302,10 +299,10 @@ if err != nil {
 }
 
 // Opt in explicitly:
-err = sqlift.Apply(ctx, db, plan, sqlift.ApplyOptions{AllowDestructive: true})
+err = sqlift.Apply(db, plan, sqlift.ApplyOptions{AllowDestructive: true})
 ```
 
-The guard exists so that destructive migrations require a conscious decision at the call site. You might choose to check `plan.HasDestructiveOperations()` (Go) / `plan.has_destructive_operations()` (C++) before applying, and surface a confirmation prompt to an operator.
+The guard exists so that destructive migrations require a conscious decision at the call site. You might choose to check `plan.HasDestructiveOperations()` (Go) or parse the plan JSON to check for destructive operations (C) before applying, and surface a confirmation prompt to an operator.
 
 ---
 
@@ -321,19 +318,19 @@ ALTER TABLE tasks ADD COLUMN notes TEXT;
 
 The next time your application starts and runs the standard migrate routine, `Apply` detects that the live schema no longer matches the hash it stored after the last successful migration:
 
-**C++:**
-```cpp
-try {
-    sqlift::apply(db, plan);
-} catch (const sqlift::DriftError& e) {
-    std::cerr << "Drift detected: " << e.what() << "\n";
+**C:**
+```c
+int rc = sqlift_apply(db, plan, 1, &err_type, &err_msg);
+if (err_type == SQLIFT_DRIFT_ERROR) {
+    fprintf(stderr, "Drift detected: %s\n", err_msg);
     // Schema has been modified outside of sqlift
+    sqlift_free(err_msg);
 }
 ```
 
 **Go:**
 ```go
-err = sqlift.Apply(ctx, db, plan, sqlift.ApplyOptions{AllowDestructive: true})
+err = sqlift.Apply(db, plan, sqlift.ApplyOptions{AllowDestructive: true})
 if err != nil {
     var de *sqlift.DriftError
     if errors.As(err, &de) {
@@ -348,14 +345,15 @@ Drift detection uses a SHA-256 hash of the extracted schema stored in the `_sqli
 
 Plans can be serialised to JSON. This is useful for reviewing migrations in CI before they reach production, transmitting plans between environments, or building an audit trail.
 
-**C++:**
-```cpp
-std::string json = sqlift::to_json(plan);
+**C:**
+```c
+// sqlift_diff() returns the plan as a JSON string directly.
 // Write to a file, send over HTTP, log it, etc.
+char* plan = sqlift_diff(current, desired, &err_type, &err_msg);
 
-// Deserialise:
-sqlift::MigrationPlan loaded = sqlift::from_json(json);
-sqlift::apply(db, loaded);
+// Later, pass the saved JSON string to sqlift_apply():
+sqlift_apply(db, plan, 1, &err_type, &err_msg);
+sqlift_free(plan);
 ```
 
 **Go:**
@@ -372,7 +370,7 @@ loaded, err := sqlift.FromJSON(data)
 if err != nil {
     return err
 }
-err = sqlift.Apply(ctx, db, loaded, sqlift.ApplyOptions{AllowDestructive: true})
+err = sqlift.Apply(db, loaded, sqlift.ApplyOptions{AllowDestructive: true})
 ```
 
 A serialised plan looks like this:
@@ -392,7 +390,7 @@ A serialised plan looks like this:
 }
 ```
 
-Plans are **cross-language compatible**: a plan serialised by the C++ library can be deserialised and applied by the Go library, and vice versa. This makes it practical to generate plans in a CI pipeline using one language and apply them from a deployment tool written in another.
+Plans are **cross-language compatible**: a plan serialised by the C library can be deserialised and applied by the Go library, and vice versa. This makes it practical to generate plans in a CI pipeline using one language and apply them from a deployment tool written in another.
 
 ---
 
@@ -403,5 +401,5 @@ You've seen the full lifecycle: initial creation, fast-path column additions, mu
 For deeper coverage of individual features:
 
 - **[guide.md](guide.md)** — Concepts and workflows: CHECK constraints, COLLATE, GENERATED columns, STRICT tables, foreign key enforcement, the 12-step rebuild sequence, and strategies for breaking changes.
-- **[reference.md](reference.md)** — Complete C++ API reference.
+- **[reference.md](reference.md)** — Complete C API reference.
 - **[reference-go.md](reference-go.md)** — Complete Go API reference.

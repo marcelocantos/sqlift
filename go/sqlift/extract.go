@@ -3,7 +3,7 @@
 
 package sqlift
 
-//#include "sqlift_c.h"
+//#include "sqlift.h"
 import "C"
 import (
 	"encoding/json"

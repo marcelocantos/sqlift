@@ -5,7 +5,7 @@ package sqlift
 
 //#cgo CFLAGS: -I${SRCDIR}/../../dist
 //#cgo LDFLAGS: ${SRCDIR}/../../build/libsqlift.a -lsqlite3 -lstdc++
-//#include "sqlift_c.h"
+//#include "sqlift.h"
 //#include <stdlib.h>
 import "C"
 import (

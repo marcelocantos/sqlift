@@ -6,11 +6,11 @@ Package `sqlift` provides declarative SQLite schema migration for Go.
 import "github.com/marcelocantos/sqlift/go/sqlift"
 ```
 
-Requires CGo. The Go library wraps the C++ implementation via an
-`extern "C"` interface; the `*Database` type manages the SQLite connection
-directly through the C++ layer (no `database/sql` or third-party driver).
+Requires CGo. The Go library wraps the C implementation via an `extern "C"`
+interface; the `*Database` type manages the SQLite connection directly through
+the C layer (no `database/sql` or third-party driver).
 
-For the C++ API, see [C++ API Reference](reference.md). For conceptual
+For the C API, see [C API Reference](reference.md). For conceptual
 background, see [Guide](guide.md).
 
 ---
@@ -265,7 +265,7 @@ the `Equal` method of each element type.
 `Hash` returns a hex-encoded SHA-256 digest of a deterministic serialisation
 of the schema. Tables, indexes, views, and triggers are each sorted
 lexicographically by name before hashing to ensure a stable result. The
-serialisation format is identical to the C++ implementation, enabling
+serialisation format is identical to the C implementation, enabling
 cross-language drift detection when both are used against the same database.
 `PKConstraintName` and `ForeignKey.ConstraintName` are excluded from the
 hash (they are cosmetic). `RawSQL` fields are also excluded.
