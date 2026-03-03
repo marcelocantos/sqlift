@@ -89,3 +89,12 @@ maintenance activities. Append-only — newest entries at the bottom.
   - C++ tests: 122, 368 assertions
   - Go tests: 149 (was 140)
   - 1.0 settling threshold: 5/4 — all gaps closed, project eligible for 1.0
+
+## 2026-03-04 — /release v0.12.0
+
+- **Commit**: `a54113c`
+- **Outcome**: Released v0.12.0. Consolidated C++ internals behind C-only public API (`sqlift.h` is pure C with `extern "C"` linkage, JSON data interchange). Go CGo wrappers updated (no `database/sql` or `mattn/go-sqlite3`). All documentation rewritten from C++ to C API. STABILITY.md surface catalogue rewritten for C API. README updated. THIRD_PARTY_LICENSES.md renamed to NOTICES (plain text).
+- **Notes**:
+  - C++ tests: 125, 372 assertions (using C API with JSON)
+  - Go tests: 149
+  - 1.0 settling threshold: reset to 0/4 — breaking API change (C++ → C public API)
