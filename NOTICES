@@ -1,13 +1,15 @@
-# Third-Party Licenses
+Third-Party Licenses
 
 This project includes the following third-party software:
 
-## doctest
+================================================================================
 
-- **Source:** https://github.com/doctest/doctest
-- **Version:** 2.4.12
-- **License:** MIT
-- **Used for:** Unit testing (test-time only)
+doctest
+
+Source:   https://github.com/doctest/doctest
+Version:  2.4.12
+License:  MIT
+Used for: Unit testing (test-time only)
 
 Copyright (c) 2016-2023 Viktor Kirilov
 
@@ -29,12 +31,14 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-## nlohmann/json
+================================================================================
 
-- **Source:** https://github.com/nlohmann/json
-- **Version:** 3.12.0
-- **License:** MIT
-- **Used for:** JSON serialization of migration plans
+nlohmann/json
+
+Source:   https://github.com/nlohmann/json
+Version:  3.12.0
+License:  MIT
+Used for: JSON serialization of migration plans
 
 Copyright (c) 2013-2025 Niels Lohmann
 
