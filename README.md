@@ -1,29 +1,36 @@
 # sqlift
 
-Declarative SQLite schema migration for C++ and Go.
+Declarative SQLite schema migration for C and Go.
 
 Maintain your schema as a single SQL file. sqlift diffs it against your database
 and applies the changes -- no numbered migration files, no ordering conflicts, no
 mental replay of fifty ALTER TABLEs to understand your schema.
 
-### C++
+### C
 
-```cpp
+```c
 #include "sqlift.h"
 
-sqlift::Schema desired = sqlift::parse(R"(
-    CREATE TABLE users (
-        id INTEGER PRIMARY KEY,
-        name TEXT NOT NULL,
-        email TEXT UNIQUE
-    );
-    CREATE INDEX idx_users_email ON users(email);
-)");
+int err_type;
+char* err_msg = NULL;
+char* desired = sqlift_parse(
+    "CREATE TABLE users ("
+    "    id INTEGER PRIMARY KEY,"
+    "    name TEXT NOT NULL,"
+    "    email TEXT UNIQUE"
+    ");"
+    "CREATE INDEX idx_users_email ON users(email);",
+    &err_type, &err_msg);
 
-sqlift::Database db("app.db");
-sqlift::Schema current = sqlift::extract(db);
-sqlift::MigrationPlan plan = sqlift::diff(current, desired);
-sqlift::apply(db, plan);
+sqlift_db* db = sqlift_db_open("app.db", 0, &err_type, &err_msg);
+char* current = sqlift_extract(db, &err_type, &err_msg);
+char* plan = sqlift_diff(current, desired, &err_type, &err_msg);
+sqlift_apply(db, plan, 0, &err_type, &err_msg);
+
+sqlift_free(plan);
+sqlift_free(current);
+sqlift_free(desired);
+sqlift_db_close(db);
 ```
 
 ### Go
@@ -38,10 +45,11 @@ desired, _ := sqlift.Parse(`
     CREATE INDEX idx_users_email ON users(email);
 `)
 
-db, _ := sql.Open("sqlite3", "app.db")
-current, _ := sqlift.Extract(ctx, db)
+db, _ := sqlift.Open("app.db")
+defer db.Close()
+current, _ := sqlift.Extract(db)
 plan, _ := sqlift.Diff(current, desired)
-sqlift.Apply(ctx, db, plan, sqlift.ApplyOptions{})
+sqlift.Apply(db, plan, sqlift.ApplyOptions{})
 ```
 
 ## Features
@@ -51,16 +59,17 @@ sqlift.Apply(ctx, db, plan, sqlift.ApplyOptions{})
 - **Inspectable plans** -- review every SQL statement before execution
 - **Destructive operation guard** -- dropping tables or columns requires explicit opt-in
 - **Drift detection** -- detects out-of-band schema changes
-- **Cross-language compatibility** -- C++ and Go produce identical schema hashes; databases are interchangeable
+- **Cross-language compatibility** -- C and Go produce identical schema hashes; databases are interchangeable
 
 ## Installation
 
-### C++
+### C
 
 Copy `dist/sqlift.h` and `dist/sqlift.cpp` into your project. Compile
 `sqlift.cpp` alongside your other sources and link against SQLite3.
 
 Requirements: C++23 compiler (GCC 13+, Clang 16+, Apple Clang 15+), SQLite3.
+The header is pure C; the implementation requires C++23.
 
 ### Go
 
@@ -68,26 +77,27 @@ Requirements: C++23 compiler (GCC 13+, Clang 16+, Apple Clang 15+), SQLite3.
 go get github.com/marcelocantos/sqlift/go/sqlift
 ```
 
-Requires CGo (uses [mattn/go-sqlite3](https://github.com/mattn/go-sqlite3)).
+Requires CGo. The Go package wraps the C library directly (no `database/sql`
+or third-party driver).
 
 ### Agent guide
 
 If you use an agentic coding tool (Claude Code, Cursor, Copilot, etc.), include
 [`dist/sqlift-agents-guide.md`](dist/sqlift-agents-guide.md) in your project context for a
-condensed API reference covering both C++ and Go.
+condensed API reference covering both C and Go.
 
 ## Documentation
 
-- **[Getting Started](docs/getting-started.md)** -- step-by-step tutorial with C++ and Go examples
+- **[Getting Started](docs/getting-started.md)** -- step-by-step tutorial with C and Go examples
 - **[Guide](docs/guide.md)** -- design rationale, core concepts, and feature reference
-- **[C++ API Reference](docs/reference.md)** -- complete C++ API reference
+- **[C API Reference](docs/reference.md)** -- complete C API reference
 - **[Go API Reference](docs/reference-go.md)** -- complete Go API reference
 - **[Agent Guide](dist/sqlift-agents-guide.md)** -- condensed reference for AI coding agents
 - **[Changelog](https://github.com/marcelocantos/sqlift/releases)** -- release history with notes
 
 ## Building and testing
 
-### C++
+### C/C++
 
 ```sh
 mk            # build library

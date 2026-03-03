@@ -3,299 +3,185 @@
 ## Commitment
 
 Version 1.0 represents a backwards-compatibility contract. After 1.0, any
-breaking change to the public API (C++ or Go), error hierarchy, JSON
-serialization format, or `_sqlift_state` schema would require forking the
-project into a new product (e.g. `sqlift2`). The pre-1.0 period exists to get
-these surfaces right.
+breaking change to the public API (C or Go), error codes, JSON interchange
+format, or `_sqlift_state` schema would require forking the project into a new
+product (e.g. `sqlift2`). The pre-1.0 period exists to get these surfaces right.
 
-Both the C++ and Go implementations share the same schema hash serialization
+Both the C and Go implementations share the same schema hash serialization
 format for cross-language drift detection.
 
 ## Interaction surface catalogue
 
-Snapshot as of v0.11.0.
+Snapshot as of v0.12.0.
 
-### C++ API
+### C API
+
+Two files: `dist/sqlift.h` (C-only header) + `dist/sqlift.cpp` (implementation).
+All functions use `extern "C"` linkage. Data interchange is JSON strings.
 
 #### Version macros
 
-```cpp
-#define SQLIFT_VERSION       "0.11.0"
+```c
+#define SQLIFT_VERSION       "0.12.0"
 #define SQLIFT_VERSION_MAJOR 0
-#define SQLIFT_VERSION_MINOR 11
+#define SQLIFT_VERSION_MINOR 12
 #define SQLIFT_VERSION_PATCH 0
 ```
 
 **Stable.** Mechanical; updated each release.
 
+#### Error codes
+
+```c
+enum sqlift_error_type {
+    SQLIFT_OK                    = 0,
+    SQLIFT_ERROR                 = 1,
+    SQLIFT_PARSE_ERROR           = 2,
+    SQLIFT_EXTRACT_ERROR         = 3,
+    SQLIFT_DIFF_ERROR            = 4,
+    SQLIFT_APPLY_ERROR           = 5,
+    SQLIFT_DRIFT_ERROR           = 6,
+    SQLIFT_DESTRUCTIVE_ERROR     = 7,
+    SQLIFT_BREAKING_CHANGE_ERROR = 8,
+    SQLIFT_JSON_ERROR            = 9,
+};
+```
+
+**Stable.** New error codes may be added (additive). Existing codes and their
+numeric values will not change.
+
+#### Database handle
+
+```c
+typedef struct sqlift_db sqlift_db;
+
+sqlift_db* sqlift_db_open(const char* path, int flags,
+                          int* err_type, char** err_msg);
+void       sqlift_db_close(sqlift_db* db);
+int        sqlift_db_exec(sqlift_db* db, const char* sql, char** err_msg);
+int        sqlift_db_query_int64(sqlift_db* db, const char* sql,
+                                 int64_t* result, char** err_msg);
+char*      sqlift_db_query_text(sqlift_db* db, const char* sql,
+                                char** err_msg);
+```
+
+**Stable.** Opaque handle wrapping SQLite. Query functions are convenience
+helpers for tests and simple consumers.
+
 #### Core functions
 
-```cpp
-Schema               parse(const std::string& sql);
-Schema               extract(sqlite3* db);
-MigrationPlan        diff(const Schema& current, const Schema& desired);
-void                 apply(sqlite3* db, const MigrationPlan& plan, const ApplyOptions& opts = {});
-int64_t              migration_version(sqlite3* db);
-std::vector<Warning> detect_redundant_indexes(const Schema& schema);
+```c
+char*   sqlift_parse(const char* ddl, int* err_type, char** err_msg);
+char*   sqlift_extract(sqlift_db* db, int* err_type, char** err_msg);
+char*   sqlift_diff(const char* current_json, const char* desired_json,
+                    int* err_type, char** err_msg);
+int     sqlift_apply(sqlift_db* db, const char* plan_json,
+                     int allow_destructive, int* err_type, char** err_msg);
+int64_t sqlift_migration_version(sqlift_db* db, int* err_type, char** err_msg);
 ```
 
-**Stable.** The first five functions are the core workflow (unchanged since
-v0.1.0 except `migration_version` added in v0.4.0).
-`detect_redundant_indexes` added in v0.10.0 — also called automatically by
-`diff()`, with results available via `MigrationPlan::warnings()`.
+**Stable.** The core workflow (parse, extract, diff, apply) plus
+migration_version.
 
-#### Schema types
+#### Utility functions
 
-```cpp
-struct Schema {
-    std::map<std::string, Table>   tables;
-    std::map<std::string, Index>   indexes;
-    std::map<std::string, View>    views;
-    std::map<std::string, Trigger> triggers;
-    bool operator==(const Schema&) const = default;
-    std::string hash() const;
-};
+```c
+char* sqlift_detect_redundant_indexes(const char* schema_json,
+                                      int* err_type, char** err_msg);
+char* sqlift_schema_hash(const char* schema_json,
+                         int* err_type, char** err_msg);
 ```
 
-**Stable.**
+**Stable.** `detect_redundant_indexes` is also called automatically by
+`sqlift_diff()`, with results in the plan's `warnings` array.
 
-```cpp
-struct Table {
-    std::string name;
-    std::vector<Column> columns;
-    std::vector<ForeignKey> foreign_keys;
-    std::vector<CheckConstraint> check_constraints;
-    std::string pk_constraint_name;        // Cosmetic; excluded from == and hash().
-    bool without_rowid = false;
-    bool strict = false;
-    std::string raw_sql;
-    bool operator==(const Table& o) const;  // excludes raw_sql, pk_constraint_name
-};
+#### Memory management
+
+```c
+void sqlift_free(void* ptr);
 ```
 
-**Stable.** Fields have only grown additively (check_constraints, strict, and
-pk_constraint_name added in v0.6.0). Equality excludes raw_sql and
-pk_constraint_name by design (both are cosmetic).
+**Stable.** All heap-allocated return values (including error messages) must be
+freed with this function.
 
-```cpp
-enum class GeneratedType { Normal = 0, Virtual = 2, Stored = 3 };
+#### JSON interchange formats
 
-struct Column {
-    std::string name;
-    std::string type;
-    bool notnull = false;
-    std::string default_value;
-    int pk = 0;
-    std::string collation;
-    GeneratedType generated = GeneratedType::Normal;
-    std::string generated_expr;
-    bool operator==(const Column&) const = default;
-};
-```
+**Schema JSON** (returned by `sqlift_parse`, `sqlift_extract`):
 
-**Stable.** The `generated` field was changed from `int` to `GeneratedType`
-enum in v0.6.0. Enum values match SQLite's `table_xinfo` PRAGMA.
+Top-level keys: `tables`, `indexes`, `views`, `triggers` (maps keyed by name).
 
-```cpp
-struct CheckConstraint {
-    std::string name;
-    std::string expression;
-    bool operator==(const CheckConstraint&) const = default;
-};
-```
+Table fields: `name`, `columns`, `foreign_keys`, `check_constraints`,
+`pk_constraint_name`, `without_rowid`, `strict`, `raw_sql`.
 
-**Stable.** Simple value type, unlikely to change.
+Column fields: `name`, `type`, `notnull`, `default_value`, `pk`, `collation`,
+`generated` (0/2/3), `generated_expr`.
 
-```cpp
-struct ForeignKey {
-    std::string constraint_name;             // Cosmetic; excluded from == and hash().
-    std::vector<std::string> from_columns;
-    std::string to_table;
-    std::vector<std::string> to_columns;
-    std::string on_update = "NO ACTION";
-    std::string on_delete = "NO ACTION";
-    bool operator==(const ForeignKey& o) const;  // excludes constraint_name
-};
-```
+ForeignKey fields: `constraint_name`, `from_columns`, `to_table`, `to_columns`,
+`on_update`, `on_delete`.
 
-**Stable.** constraint_name added in v0.6.0. Equality excludes constraint_name
-(cosmetic only).
+CheckConstraint fields: `name`, `expression`.
 
-```cpp
-struct Index {
-    std::string name;
-    std::string table_name;
-    std::vector<std::string> columns;
-    bool unique = false;
-    std::string where_clause;
-    std::string raw_sql;
-    bool operator==(const Index& o) const;  // excludes raw_sql
-};
-```
+Index fields: `name`, `table_name`, `columns`, `unique`, `where_clause`,
+`raw_sql`.
 
-**Stable.**
+View fields: `name`, `sql`.
 
-```cpp
-struct View {
-    std::string name;
-    std::string sql;
-    bool operator==(const View&) const = default;
-};
+Trigger fields: `name`, `table_name`, `sql`.
 
-struct Trigger {
-    std::string name;
-    std::string table_name;
-    std::string sql;
-    bool operator==(const Trigger&) const = default;
-};
-```
+**Plan JSON** (returned by `sqlift_diff`, accepted by `sqlift_apply`):
 
-**Stable.**
+Top-level: `version` (int, currently 1), `operations` (array), `warnings`
+(array).
 
-#### Warning types
+Operation fields: `type`, `object_name`, `description`, `sql`, `destructive`.
 
-```cpp
-enum class WarningType {
-    RedundantIndex,
-};
+Operation types: `CreateTable`, `DropTable`, `RebuildTable`, `AddColumn`,
+`CreateIndex`, `DropIndex`, `CreateView`, `DropView`, `CreateTrigger`,
+`DropTrigger`.
 
-struct Warning {
-    WarningType type;
-    std::string message;        // Human-readable description.
-    std::string index_name;     // The redundant index.
-    std::string covered_by;     // The covering index name, or "PRIMARY KEY".
-    std::string table_name;
-};
-```
+**Warning JSON** (in plan `warnings` and from `sqlift_detect_redundant_indexes`):
 
-**Stable.** Added in v0.10.0. WarningType may gain new variants in future
-(additive, not breaking).
+Fields: `type`, `message`, `index_name`, `covered_by`, `table_name`.
 
-#### Migration plan and operations
+Warning types: `RedundantIndex`.
 
-```cpp
-enum class OpType {
-    CreateTable, DropTable, RebuildTable, AddColumn,
-    CreateIndex, DropIndex,
-    CreateView, DropView,
-    CreateTrigger, DropTrigger,
-};
-
-struct Operation {
-    OpType type;
-    std::string object_name;
-    std::string description;
-    std::vector<std::string> sql;
-    bool destructive = false;
-};
-
-class MigrationPlan {
-public:
-    const std::vector<Operation>& operations() const;
-    const std::vector<Warning>& warnings() const;
-    bool has_destructive_operations() const;
-    bool empty() const;
-};
-```
-
-**Stable.** OpType may gain new variants in future (additive, not breaking).
-
-```cpp
-struct ApplyOptions {
-    bool allow_destructive = false;
-};
-```
-
-**Stable.** New fields can be added with defaults (additive).
-
-#### JSON serialization
-
-```cpp
-std::string to_string(OpType type);
-OpType      op_type_from_string(const std::string& s);
-std::string to_json(const MigrationPlan& plan);
-MigrationPlan from_json(const std::string& json_str);
-```
-
-**Stable.** JSON format is versioned (`"version": 1`). New fields can be added
-without breaking existing consumers.
-
-#### Exception hierarchy
-
-```
-std::runtime_error
-  sqlift::Error
-    sqlift::ParseError
-    sqlift::ExtractError
-    sqlift::DiffError
-    sqlift::ApplyError
-    sqlift::DriftError
-    sqlift::DestructiveError
-    sqlift::BreakingChangeError
-    sqlift::JsonError
-```
-
-**Stable.** New exception types can be added under `Error` (additive). Existing
-types will not be removed or reparented.
-
-#### Utility classes
-
-```cpp
-class Database {
-public:
-    explicit Database(const std::string& path,
-                      int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
-    ~Database();
-    Database(Database&&) noexcept;
-    Database& operator=(Database&&) noexcept;
-    sqlite3* get() const;
-    operator sqlite3*() const;
-    void exec(const std::string& sql);
-};
-
-class Statement {
-public:
-    Statement(sqlite3* db, const std::string& sql);
-    ~Statement();
-    Statement(Statement&&) noexcept;
-    Statement& operator=(Statement&&) noexcept;
-    bool step();
-    int64_t column_int(int col) const;
-    std::string column_text(int col) const;
-    void bind_text(int param, const std::string& value);
-    void bind_int(int param, int64_t value);
-    sqlite3_stmt* get() const;
-};
-```
-
-**Stable.** These are thin RAII wrappers. The only change since v0.1.0 was
-widening int to int64_t in v0.4.0.
-
-#### Internal utilities
-
-`sha256()` was moved to a file-local function in sqlift.cpp in v0.6.0. It is no
-longer part of the public API.
+**Stable.** JSON format is versioned. New fields and warning/operation types can
+be added without breaking existing consumers.
 
 ### Go API
 
 Module: `github.com/marcelocantos/sqlift/go/sqlift`
 
+Requires CGo. Wraps the C implementation via `extern "C"`.
+
 #### Core functions
 
 ```go
+func Open(path string) (*Database, error)
 func Parse(ddl string) (Schema, error)
-func Extract(ctx context.Context, db *sql.DB) (Schema, error)
+func Extract(db *Database) (Schema, error)
 func Diff(current, desired Schema) (MigrationPlan, error)
-func Apply(ctx context.Context, db *sql.DB, plan MigrationPlan, opts ApplyOptions) error
-func MigrationVersion(ctx context.Context, db *sql.DB) (int64, error)
+func Apply(db *Database, plan MigrationPlan, opts ApplyOptions) error
+func MigrationVersion(db *Database) (int64, error)
 func DetectRedundantIndexes(schema Schema) []Warning
 ```
 
-**Stable.** Direct ports of the C++ functions. `Extract` and `Apply` take
-`context.Context` and `*sql.DB` (standard Go database patterns). `Apply`
-returns `error` instead of throwing. `DetectRedundantIndexes` added in
-v0.10.0 — also called automatically by `Diff()`, with results available via
-`MigrationPlan.Warnings()`.
+**Stable.** The Go API wraps the C functions directly. `*Database` is an opaque
+handle wrapping `sqlift_db*` (no `database/sql` or third-party driver).
+
+#### Database type
+
+```go
+type Database struct { /* opaque C handle */ }
+
+func Open(path string) (*Database, error)
+func (d *Database) Close()
+func (d *Database) Exec(sql string) error
+func (d *Database) QueryInt64(sql string) (int64, error)
+func (d *Database) QueryText(sql string) (string, error)
+```
+
+**Stable.** Wraps the C `sqlift_db` handle with idiomatic Go methods.
 
 #### Schema types
 
@@ -365,7 +251,7 @@ func (s Schema) Equal(o Schema) bool
 func (s Schema) Hash() string
 ```
 
-**Stable.** Mirrors the C++ types with Go naming conventions.
+**Stable.** Mirrors the C JSON schema types with Go naming conventions.
 
 #### Warning types
 
@@ -378,14 +264,14 @@ const (
 
 type Warning struct {
     Type      WarningType
-    Message   string // Human-readable description.
-    IndexName string // The redundant index.
-    CoveredBy string // The covering index name, or "PRIMARY KEY".
-    TableName string // The table both indexes belong to.
+    Message   string
+    IndexName string
+    CoveredBy string
+    TableName string
 }
 ```
 
-**Stable.** Added in v0.10.0. Mirrors the C++ warning types.
+**Stable.** WarningType may gain new variants in future (additive).
 
 #### Migration plan and operations
 
@@ -427,7 +313,7 @@ type ApplyOptions struct {
 }
 ```
 
-**Stable.** Mirrors the C++ types.
+**Stable.** OpType may gain new variants in future (additive).
 
 #### JSON serialization
 
@@ -437,7 +323,7 @@ func FromJSON(data []byte) (MigrationPlan, error)
 func ParseOpType(s string) (OpType, error)
 ```
 
-**Stable.** Same JSON wire format (`"version": 1`) as C++.
+**Stable.** Same JSON wire format (`"version": 1`) as the C API.
 
 #### Error types
 
@@ -452,13 +338,13 @@ func ParseOpType(s string) (OpType, error)
 *JSONError
 ```
 
-**Stable.** Each has a `Msg string` field and implements `error`. Mirrors the
-C++ exception hierarchy. Use `errors.As` for type assertions.
+**Stable.** Each has a `Msg string` field and implements `error`. Use
+`errors.As` for type assertions. New error types may be added (additive).
 
 ### Cross-language compatibility
 
-The hash serialization format is identical between C++ and Go. A database
-migrated by the C++ library can be read by the Go library (and vice versa)
+The hash serialization format is identical between C and Go. A database
+migrated by the C library can be read by the Go library (and vice versa)
 without triggering drift detection. This is verified by
 `TestCrossLanguageHash` (Go) and `"cross-language hash"` (C++ doctest).
 
@@ -468,6 +354,11 @@ without triggering drift detection. This is verified by
 
 No known gaps remain. All public API surfaces have documentation, tests, and
 runnable Go examples.
+
+**Settling threshold**: ~70 surface items → N=4. This release (v0.12.0)
+introduces a breaking change (C++ public API replaced with C-only API), so
+the counter resets. Four consecutive minor releases with no breaking changes
+are needed before 1.0 eligibility.
 
 ## Out of scope for 1.0
 
