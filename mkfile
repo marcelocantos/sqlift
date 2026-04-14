@@ -1,6 +1,7 @@
 include std/cxx.mk
 
-cxx ?= c++
+ccache = $[shell command -v ccache 2>/dev/null]
+cxx = $ccache c++
 cxxflags = -std=c++23 -Wall -Wextra -Wpedantic -O2
 cppflags = -Idist -Ivendor/include
 ldlibs = -lsqlite3
