@@ -76,7 +76,8 @@ char*   sqlift_extract(sqlift_db* db, int* err_type, char** err_msg);
 char*   sqlift_diff(const char* current_json, const char* desired_json,
                     int* err_type, char** err_msg);
 int     sqlift_apply(sqlift_db* db, const char* plan_json,
-                     int allow_destructive, int* err_type, char** err_msg);
+                     const sqlift_apply_options opts,
+                     int* err_type, char** err_msg);
 int64_t sqlift_migration_version(sqlift_db* db, int* err_type, char** err_msg);
 ```
 

@@ -12,12 +12,14 @@ import "unsafe"
 //
 // Steps:
 //  1. If the plan is empty, return nil immediately.
-//  2. If the plan contains destructive operations and opts.AllowDestructive is
-//     false, return a [DestructiveError].
-//  3. Extract the current schema and compare the stored hash with the actual
+//  2. If the plan contains rebuild operations and opts.Allow lacks
+//     [AllowRebuild], return a [RebuildError].
+//  3. If the plan contains destructive operations and opts.Allow lacks
+//     [AllowDestructive], return a [DestructiveError].
+//  4. Extract the current schema and compare the stored hash with the actual
 //     hash. If they differ, return a [DriftError].
-//  4. Execute each operation's SQL statements.
-//  5. On success: extract the updated schema and store its hash.
+//  5. Execute each operation's SQL statements.
+//  6. On success: extract the updated schema and store its hash.
 func Apply(db *Database, plan MigrationPlan, opts ApplyOptions) error {
 	planJSON, err := ToJSON(plan)
 	if err != nil {
@@ -27,14 +29,11 @@ func Apply(db *Database, plan MigrationPlan, opts ApplyOptions) error {
 	cplan := C.CString(string(planJSON))
 	defer C.free(unsafe.Pointer(cplan))
 
-	allowDestructive := C.int(0)
-	if opts.AllowDestructive {
-		allowDestructive = 1
-	}
+	cOpts := C.sqlift_apply_options{allow: C.uint(opts.Allow)}
 
 	var errType C.int
 	var errMsg *C.char
-	C.sqlift_apply(db.db, cplan, allowDestructive, &errType, &errMsg)
+	C.sqlift_apply(db.db, cplan, cOpts, &errType, &errMsg)
 	if errType != C.SQLIFT_OK {
 		return goError(errType, errMsg)
 	}

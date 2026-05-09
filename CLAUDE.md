@@ -25,7 +25,7 @@ Three core operations exposed via the C API:
 
 Plus one action:
 
-4. **`sqlift_apply(db, plan_json, allow_destructive)`** -- execute the plan's SQL, with destructive guard and drift detection
+4. **`sqlift_apply(db, plan_json, opts)`** -- execute the plan's SQL. `opts.allow` is a bitmask (`SQLIFT_ALLOW_REBUILD`, `SQLIFT_ALLOW_DESTRUCTIVE`, `SQLIFT_ALLOW_ALL`); zero is the strictest policy (additive changes only).
 
 `sqlift_diff()` never touches a database. `sqlift_apply()` stores a SHA-256 hash in `_sqlift_state` for drift detection.
 

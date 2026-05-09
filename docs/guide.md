@@ -106,7 +106,7 @@ char* desired = sqlift_parse(
 sqlift_db* db = sqlift_db_open("app.db", 0, &err_type, &err_msg);
 char* current = sqlift_extract(db, &err_type, &err_msg);
 char* plan = sqlift_diff(current, desired, &err_type, &err_msg);
-sqlift_apply(db, plan, 0, &err_type, &err_msg);
+sqlift_apply(db, plan, (sqlift_apply_options){0}, &err_type, &err_msg);
 sqlift_free(plan);
 sqlift_free(current);
 sqlift_free(desired);
@@ -218,29 +218,49 @@ operations are those that lose data:
 - Dropping an index
 - Removing a column (via table rebuild)
 
-By default, `apply()` refuses to execute a plan that contains destructive
-operations. This is a safety net: in development you typically allow them, while
-in production the refusal gives you a chance to review the plan and confirm that
-dropping data is intentional.
+`apply()` is strict by default: only pure additive changes (CREATE TABLE, ADD
+COLUMN, etc.) are permitted. To allow more invasive operations, set bits in
+`opts.allow`:
+
+| Flag | What it permits |
+|---|---|
+| `SQLIFT_ALLOW_REBUILD` / `AllowRebuild` | SQLite's 12-step table rebuild (column type change, dropping a CHECK/FK, reordering) |
+| `SQLIFT_ALLOW_DESTRUCTIVE` / `AllowDestructive` | Drops: tables, columns (via rebuild), indexes, views, triggers |
+| `SQLIFT_ALLOW_ALL` / `AllowAll` | Everything currently defined |
+
+This is a safety net: in development you typically allow most things, while in
+production the refusal gives you a chance to review the plan and confirm the
+change is intentional. The two gates are independent -- you can allow a
+non-destructive rebuild without allowing drops.
 
 **C:**
 
 ```c
-// Returns SQLIFT_DESTRUCTIVE_ERROR if the plan drops anything
-sqlift_apply(db, plan, /*allow_destructive=*/0, &err_type, &err_msg);
+// Strictest -- only additive changes succeed.
+sqlift_apply(db, plan, (sqlift_apply_options){0}, &err_type, &err_msg);
 
-// Opt in to destructive operations
-sqlift_apply(db, plan, /*allow_destructive=*/1, &err_type, &err_msg);
+// Permit a column type change (rebuild) but not drops.
+sqlift_apply(db, plan,
+             (sqlift_apply_options){.allow = SQLIFT_ALLOW_REBUILD},
+             &err_type, &err_msg);
+
+// Permit anything.
+sqlift_apply(db, plan,
+             (sqlift_apply_options){.allow = SQLIFT_ALLOW_ALL},
+             &err_type, &err_msg);
 ```
 
 **Go:**
 
 ```go
-// This returns a *DestructiveError if the plan drops anything
+// Strictest -- returns *RebuildError or *DestructiveError as needed.
 err := sqlift.Apply(db, plan, sqlift.ApplyOptions{})
 
-// Opt in to destructive operations
-err = sqlift.Apply(db, plan, sqlift.ApplyOptions{AllowDestructive: true})
+// Permit rebuilds but not drops.
+err = sqlift.Apply(db, plan, sqlift.ApplyOptions{Allow: sqlift.AllowRebuild})
+
+// Permit anything.
+err = sqlift.Apply(db, plan, sqlift.ApplyOptions{Allow: sqlift.AllowAll})
 ```
 
 ## Breaking change detection
@@ -361,7 +381,7 @@ it does not appear in diffs or interfere with your schema definitions.
 **C:**
 
 ```c
-int rc = sqlift_apply(db, plan, 0, &err_type, &err_msg);
+int rc = sqlift_apply(db, plan, (sqlift_apply_options){0}, &err_type, &err_msg);
 if (err_type == SQLIFT_DRIFT_ERROR) {
     fprintf(stderr, "Schema was modified outside of sqlift: %s\n", err_msg);
     sqlift_free(err_msg);
@@ -526,7 +546,7 @@ transmission between environments. The JSON format is versioned (`"version":
 char* plan = sqlift_diff(current, desired, &err_type, &err_msg);
 
 // Later, pass the saved JSON string to sqlift_apply():
-sqlift_apply(db, plan, 0, &err_type, &err_msg);
+sqlift_apply(db, plan, (sqlift_apply_options){0}, &err_type, &err_msg);
 sqlift_free(plan);
 ```
 
@@ -578,7 +598,8 @@ Errors are reported via error codes in C and error values in Go.
 | `SQLIFT_EXTRACT_ERROR` | Schema extraction from a live database fails |
 | `SQLIFT_DIFF_ERROR` | Schema comparison encounters an internal error |
 | `SQLIFT_APPLY_ERROR` | SQL execution fails during `sqlift_apply()` (e.g. FK violation) |
-| `SQLIFT_DESTRUCTIVE_ERROR` | Plan has destructive ops and `allow_destructive` is 0 |
+| `SQLIFT_DESTRUCTIVE_ERROR` | Plan has destructive ops and `SQLIFT_ALLOW_DESTRUCTIVE` is not set |
+| `SQLIFT_REBUILD_ERROR` | Plan requires a SQLite table rebuild and `SQLIFT_ALLOW_REBUILD` is not set |
 | `SQLIFT_DRIFT_ERROR` | Schema was modified outside of sqlift since last apply |
 | `SQLIFT_BREAKING_CHANGE_ERROR` | Schema change depends on existing data |
 | `SQLIFT_JSON_ERROR` | Invalid JSON or missing fields in plan JSON |

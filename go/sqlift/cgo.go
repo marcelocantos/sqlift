@@ -35,6 +35,8 @@ func goError(errType C.int, errMsg *C.char) error {
 		return &DestructiveError{Msg: msg}
 	case C.SQLIFT_BREAKING_CHANGE_ERROR:
 		return &BreakingChangeError{Msg: msg}
+	case C.SQLIFT_REBUILD_ERROR:
+		return &RebuildError{Msg: msg}
 	case C.SQLIFT_JSON_ERROR:
 		return &JSONError{Msg: msg}
 	default:

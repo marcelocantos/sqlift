@@ -130,7 +130,7 @@ TEST_CASE("json round-trip: plan with multiple operation types") {
     // Set up a DB with the current schema, then apply the diff plan.
     TestDB db;
     apply_plan(db.db, diff_schemas(empty_schema(), current));
-    apply_plan(db.db, plan_str, /*allow_destructive=*/true);
+    apply_plan(db.db, plan_str, SQLIFT_ALLOW_ALL);
     auto after = json::parse(extract_schema(db.db));
     CHECK(after["tables"].contains("users"));
     CHECK(after["tables"].contains("posts"));
@@ -154,10 +154,10 @@ TEST_CASE("json round-trip: destructive operations") {
     CHECK(has_destructive);
     CHECK(has_drop_table);
 
-    // Can be applied with allow_destructive=true.
+    // Can be applied with SQLIFT_ALLOW_ALL.
     TestDB db;
     db.exec("CREATE TABLE users (id INTEGER PRIMARY KEY);");
-    apply_plan(db.db, plan_str, /*allow_destructive=*/true);
+    apply_plan(db.db, plan_str, SQLIFT_ALLOW_ALL);
     auto after = json::parse(extract_schema(db.db));
     CHECK(after["tables"].empty());
 }

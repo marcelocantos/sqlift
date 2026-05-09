@@ -74,10 +74,65 @@ TEST_CASE("apply destructive with flag") {
     auto desired = empty_schema();
     auto plan_str = diff_schemas(current, desired);
 
-    apply_plan(db.db, plan_str, true);
+    apply_plan(db.db, plan_str, SQLIFT_ALLOW_ALL);
 
     auto after = json::parse(extract_schema(db.db));
     CHECK(after["tables"].empty());
+}
+
+TEST_CASE("apply refuses rebuild without flag") {
+    TestDB db;
+    db.exec("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);");
+
+    // Column type change forces a rebuild but is not destructive.
+    auto desired = parse_schema(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name BLOB);");
+    auto current = extract_schema(db.db);
+    auto plan_str = diff_schemas(current, desired);
+
+    CHECK(apply_err(db.db, plan_str, SQLIFT_ALLOW_NONE) == SQLIFT_REBUILD_ERROR);
+}
+
+TEST_CASE("apply rebuild with flag") {
+    TestDB db;
+    db.exec("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);");
+    db.exec("INSERT INTO users (id, name) VALUES (1, 'Alice');");
+
+    auto desired = parse_schema(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name BLOB);");
+    auto current = extract_schema(db.db);
+    auto plan_str = diff_schemas(current, desired);
+
+    apply_plan(db.db, plan_str, SQLIFT_ALLOW_REBUILD);
+
+    // Data preserved through the rebuild.
+    int64_t cnt = 0;
+    int rc = sqlift_db_query_int64(db.db, "SELECT COUNT(*) FROM users", &cnt, nullptr);
+    CHECK(rc == 0);
+    CHECK(cnt == 1);
+}
+
+TEST_CASE("apply pure addition succeeds with strictest defaults") {
+    TestDB db;
+    auto desired = parse_schema("CREATE TABLE users (id INTEGER PRIMARY KEY);");
+    auto plan_str = diff_schemas(empty_schema(), desired);
+
+    // SQLIFT_ALLOW_NONE: no rebuild, no destructive — pure CREATE TABLE works.
+    apply_plan(db.db, plan_str, SQLIFT_ALLOW_NONE);
+
+    auto after = json::parse(extract_schema(db.db));
+    CHECK(after["tables"].contains("users"));
+}
+
+TEST_CASE("apply rejects destructive even with allow_rebuild") {
+    TestDB db;
+    db.exec("CREATE TABLE users (id INTEGER PRIMARY KEY);");
+
+    auto current = extract_schema(db.db);
+    auto plan_str = diff_schemas(current, empty_schema());
+
+    // DropTable is destructive but does not require a rebuild.
+    CHECK(apply_err(db.db, plan_str, SQLIFT_ALLOW_REBUILD) == SQLIFT_DESTRUCTIVE_ERROR);
 }
 
 TEST_CASE("apply updates state hash") {
@@ -254,5 +309,5 @@ TEST_CASE("apply detects drift") {
     auto current = extract_schema(db.db);
     auto plan_str = diff_schemas(current, v2);
 
-    CHECK(apply_err(db.db, plan_str, true) == SQLIFT_DRIFT_ERROR);
+    CHECK(apply_err(db.db, plan_str, SQLIFT_ALLOW_ALL) == SQLIFT_DRIFT_ERROR);
 }

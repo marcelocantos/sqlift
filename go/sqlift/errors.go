@@ -29,10 +29,17 @@ type DriftError struct{ Msg string }
 func (e *DriftError) Error() string { return e.Msg }
 
 // DestructiveError indicates that a plan contains destructive operations
-// and AllowDestructive was not set.
+// and [AllowDestructive] was not set in [ApplyOptions.Allow].
 type DestructiveError struct{ Msg string }
 
 func (e *DestructiveError) Error() string { return e.Msg }
+
+// RebuildError indicates that a plan contains table rebuild operations
+// (SQLite's 12-step rebuild) and [AllowRebuild] was not set in
+// [ApplyOptions.Allow].
+type RebuildError struct{ Msg string }
+
+func (e *RebuildError) Error() string { return e.Msg }
 
 // BreakingChangeError indicates that the desired schema contains changes
 // whose success depends on existing data.

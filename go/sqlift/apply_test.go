@@ -100,7 +100,7 @@ func TestApply(t *testing.T) {
 		desired := mustParse(t, "") // empty schema — drops users
 		plan := mustDiff(t, current, desired)
 
-		err := Apply(db, plan, ApplyOptions{AllowDestructive: false})
+		err := Apply(db, plan, ApplyOptions{})
 		if err == nil {
 			t.Fatal("expected DestructiveError, got nil")
 		}
@@ -118,11 +118,84 @@ func TestApply(t *testing.T) {
 		current := mustExtract(t, db)
 		desired := mustParse(t, "") // empty schema — drops users
 		plan := mustDiff(t, current, desired)
-		mustApply(t, db, plan, ApplyOptions{AllowDestructive: true})
+		mustApply(t, db, plan, ApplyOptions{Allow: AllowAll})
 
 		after := mustExtract(t, db)
 		if len(after.Tables) != 0 {
 			t.Errorf("expected 0 tables after destructive apply, got %d", len(after.Tables))
+		}
+	})
+
+	t.Run("apply refuses rebuild without flag", func(t *testing.T) {
+		db := openMemory(t)
+		mustExec(t, db,
+			"CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);")
+
+		// Column type change forces a rebuild but is not destructive.
+		desired := mustParse(t,
+			"CREATE TABLE users (id INTEGER PRIMARY KEY, name BLOB);")
+		current := mustExtract(t, db)
+		plan := mustDiff(t, current, desired)
+
+		err := Apply(db, plan, ApplyOptions{}) // strictest defaults
+		if err == nil {
+			t.Fatal("expected RebuildError, got nil")
+		}
+		var re *RebuildError
+		if !errors.As(err, &re) {
+			t.Errorf("expected *RebuildError, got %T: %v", err, err)
+		}
+	})
+
+	t.Run("apply rebuild with flag", func(t *testing.T) {
+		db := openMemory(t)
+		mustExec(t, db,
+			"CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);")
+		mustExec(t, db, "INSERT INTO users (id, name) VALUES (1, 'Alice');")
+
+		desired := mustParse(t,
+			"CREATE TABLE users (id INTEGER PRIMARY KEY, name BLOB);")
+		current := mustExtract(t, db)
+		plan := mustDiff(t, current, desired)
+
+		mustApply(t, db, plan, ApplyOptions{Allow: AllowRebuild})
+
+		n, err := db.QueryInt64("SELECT COUNT(*) FROM users")
+		if err != nil {
+			t.Fatalf("QueryInt64: %v", err)
+		}
+		if n != 1 {
+			t.Errorf("expected 1 row preserved through rebuild, got %d", n)
+		}
+	})
+
+	t.Run("apply pure addition succeeds with strictest defaults", func(t *testing.T) {
+		db := openMemory(t)
+		desired := mustParse(t, "CREATE TABLE users (id INTEGER PRIMARY KEY);")
+		empty := mustExtract(t, db)
+		plan := mustDiff(t, empty, desired)
+
+		// AllowNone = no rebuild, no destructive. Pure CREATE TABLE works.
+		if err := Apply(db, plan, ApplyOptions{}); err != nil {
+			t.Fatalf("Apply with strict defaults failed: %v", err)
+		}
+	})
+
+	t.Run("apply rejects destructive even with allow_rebuild", func(t *testing.T) {
+		db := openMemory(t)
+		mustExec(t, db, "CREATE TABLE users (id INTEGER PRIMARY KEY);")
+
+		current := mustExtract(t, db)
+		desired := mustParse(t, "")
+		plan := mustDiff(t, current, desired)
+
+		err := Apply(db, plan, ApplyOptions{Allow: AllowRebuild})
+		if err == nil {
+			t.Fatal("expected DestructiveError, got nil")
+		}
+		var de *DestructiveError
+		if !errors.As(err, &de) {
+			t.Errorf("expected *DestructiveError, got %T: %v", err, err)
 		}
 	})
 
@@ -162,7 +235,7 @@ func TestApply(t *testing.T) {
 				"CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id BIGINT REFERENCES users(id));")
 		plan := mustDiff(t, current, desired)
 
-		err := Apply(db, plan, ApplyOptions{})
+		err := Apply(db, plan, ApplyOptions{Allow: AllowRebuild})
 		if err == nil {
 			t.Fatal("expected ApplyError for FK violation, got nil")
 		}
@@ -427,7 +500,7 @@ func TestApply(t *testing.T) {
 			t.Fatalf("Diff failed: %v", err)
 		}
 
-		err = Apply(db, plan2, ApplyOptions{AllowDestructive: true})
+		err = Apply(db, plan2, ApplyOptions{Allow: AllowAll})
 		if err == nil {
 			t.Fatal("expected DriftError, got nil")
 		}

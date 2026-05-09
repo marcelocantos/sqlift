@@ -168,19 +168,21 @@ Execute a migration plan against a live database. If the plan is empty,
 
 **Behaviour:**
 
-1. If the plan contains destructive operations and `opts.AllowDestructive`
-   is `false`, return `*DestructiveError` immediately.
-2. Extract the current schema and read the stored hash from `_sqlift_state`.
+1. If the plan contains a `RebuildTable` operation and `opts.Allow` does not
+   include [`AllowRebuild`](#allowflags), return `*RebuildError` immediately.
+2. If the plan contains destructive operations and `opts.Allow` does not
+   include `AllowDestructive`, return `*DestructiveError` immediately.
+3. Extract the current schema and read the stored hash from `_sqlift_state`.
    If a stored hash exists and differs from the current schema hash, return
    `*DriftError` (the schema was modified outside sqlift).
-3. Record the current `PRAGMA foreign_keys` state so it can be restored on
+4. Record the current `PRAGMA foreign_keys` state so it can be restored on
    failure.
-4. Execute each operation's SQL statements. `PRAGMA foreign_key_check`
+5. Execute each operation's SQL statements. `PRAGMA foreign_key_check`
    statements are handled specially: any returned rows indicate violations
    and cause `*ApplyError`.
-5. On any error: roll back the `sqlift_rebuild` savepoint (if open), release
+6. On any error: roll back the `sqlift_rebuild` savepoint (if open), release
    it, restore the FK enforcement state, and return the original error.
-6. On success: extract the updated schema, store its SHA-256 hash in
+7. On success: extract the updated schema, store its SHA-256 hash in
    `_sqlift_state`, and increment the migration version counter.
 
 **Parameters:**
@@ -189,8 +191,10 @@ Execute a migration plan against a live database. If the plan is empty,
 - `opts` -- options controlling behaviour (see `ApplyOptions`).
 
 **Errors:**
+- `*RebuildError` -- plan requires SQLite's table rebuild and `AllowRebuild`
+  is not set.
 - `*DestructiveError` -- plan has destructive operations and
-  `AllowDestructive` is `false`.
+  `AllowDestructive` is not set.
 - `*DriftError` -- schema was modified outside sqlift since the last `Apply`.
 - `*ApplyError` -- a SQL statement failed during execution (including FK
   violations detected by `PRAGMA foreign_key_check`).
@@ -198,13 +202,18 @@ Execute a migration plan against a live database. If the plan is empty,
 **Example:**
 
 ```go
-err := sqlift.Apply(db, plan, sqlift.ApplyOptions{AllowDestructive: false})
+err := sqlift.Apply(db, plan, sqlift.ApplyOptions{}) // strictest defaults
 if err != nil {
+    var re *sqlift.RebuildError
     var de *sqlift.DestructiveError
-    if errors.As(err, &de) {
-        log.Fatal("destructive migration requires explicit opt-in")
+    switch {
+    case errors.As(err, &re):
+        log.Fatal("rebuild migration requires AllowRebuild opt-in")
+    case errors.As(err, &de):
+        log.Fatal("destructive migration requires AllowDestructive opt-in")
+    default:
+        log.Fatal(err)
     }
-    log.Fatal(err)
 }
 ```
 
@@ -532,14 +541,39 @@ func (t OpType) String() string
 
 ```go
 type ApplyOptions struct {
-    AllowDestructive bool
+    Allow AllowFlags
 }
 ```
 
-- `AllowDestructive` -- if `false` (the zero value), `Apply` returns
-  `*DestructiveError` when the plan contains any operation with
-  `Destructive == true`. Set to `true` to permit dropping tables, columns,
-  and indexes.
+- `Allow` -- bitmask of [`AllowFlags`](#allowflags). Zero value (the default)
+  is the strictest policy: only pure additions (CREATE TABLE/INDEX/VIEW/TRIGGER,
+  ADD COLUMN) succeed. OR in flags to opt into more invasive operations.
+
+### `AllowFlags`
+
+```go
+type AllowFlags uint32
+
+const (
+    AllowRebuild     AllowFlags = 1 << 0
+    AllowDestructive AllowFlags = 1 << 1
+    AllowNone        AllowFlags = 0
+    AllowAll         AllowFlags = AllowRebuild | AllowDestructive
+)
+```
+
+- `AllowRebuild` -- permit `RebuildTable` operations (SQLite's 12-step
+  rebuild). Required for any table change beyond appending nullable /
+  DEFAULTed columns: column type changes, dropping a CHECK or FK constraint,
+  reordering columns. Rebuilds are expensive on large tables.
+- `AllowDestructive` -- permit operations that drop data: `DropTable`,
+  `DropColumn` (via rebuild), and `DropIndex` / `DropView` / `DropTrigger`
+  when the object is removed entirely.
+- `AllowNone` -- explicit name for the zero value (no opt-ins).
+- `AllowAll` -- enable every currently-defined opt-in.
+
+The flags are independent: you can permit a non-destructive rebuild
+(e.g. column type change) without permitting drops, and vice versa.
 
 ---
 
@@ -638,7 +672,8 @@ assertions.
 | `*DiffError` | `Diff` (internal) | Internal error during schema comparison. |
 | `*ApplyError` | `Apply`, `MigrationVersion` | SQL execution failure, FK violation, or connection error. |
 | `*DriftError` | `Apply` | Schema was modified outside sqlift since the last `Apply`. |
-| `*DestructiveError` | `Apply` | Plan has destructive operations and `AllowDestructive` is `false`. |
+| `*DestructiveError` | `Apply` | Plan has destructive operations and `AllowDestructive` is not set in `opts.Allow`. |
+| `*RebuildError` | `Apply` | Plan requires SQLite's table rebuild and `AllowRebuild` is not set in `opts.Allow`. |
 | `*BreakingChangeError` | `Diff` | Desired schema contains a data-dependent change (nullable→NOT NULL, new FK, new CHECK, new NOT NULL column without DEFAULT). |
 | `*JSONError` | `FromJSON`, `ParseOpType` | JSON parsing or validation failure. |
 
@@ -659,11 +694,14 @@ applyErr := sqlift.Apply(db, plan, sqlift.ApplyOptions{})
 if applyErr != nil {
     var drift *sqlift.DriftError
     var destr *sqlift.DestructiveError
+    var rb *sqlift.RebuildError
     switch {
     case errors.As(applyErr, &drift):
         fmt.Fprintln(os.Stderr, "schema drift detected — manual intervention required")
+    case errors.As(applyErr, &rb):
+        fmt.Fprintln(os.Stderr, "re-run with Allow: AllowRebuild to proceed")
     case errors.As(applyErr, &destr):
-        fmt.Fprintln(os.Stderr, "re-run with AllowDestructive=true to proceed")
+        fmt.Fprintln(os.Stderr, "re-run with Allow: AllowDestructive to proceed")
     default:
         log.Fatal(applyErr)
     }
