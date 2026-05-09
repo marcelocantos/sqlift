@@ -38,8 +38,8 @@ char* current = sqlift_extract(db, &err_type, &err_msg);
 // 4. Diff (pure function, no DB access) -- returns plan JSON
 char* plan = sqlift_diff(current, desired, &err_type, &err_msg);
 
-// 5. Apply
-sqlift_apply(db, plan, /*allow_destructive=*/0, &err_type, &err_msg);
+// 5. Apply (strictest defaults: only additive changes succeed)
+sqlift_apply(db, plan, (sqlift_apply_options){0}, &err_type, &err_msg);
 
 // 6. Clean up
 sqlift_free(plan);
@@ -64,7 +64,14 @@ enum sqlift_error_type {
     SQLIFT_DESTRUCTIVE_ERROR = 7,
     SQLIFT_BREAKING_CHANGE_ERROR = 8,
     SQLIFT_JSON_ERROR       = 9,
+    SQLIFT_REBUILD_ERROR    = 10,
 };
+
+// Permission flags for sqlift_apply_options.allow
+#define SQLIFT_ALLOW_REBUILD     (1u << 0)
+#define SQLIFT_ALLOW_DESTRUCTIVE (1u << 1)
+#define SQLIFT_ALLOW_NONE        0u
+#define SQLIFT_ALLOW_ALL         (SQLIFT_ALLOW_REBUILD | SQLIFT_ALLOW_DESTRUCTIVE)
 ```
 
 #### Functions
@@ -77,7 +84,7 @@ enum sqlift_error_type {
 | `sqlift_parse(ddl, &et, &em)` | `char*` | Parse DDL → schema JSON. NULL on error. |
 | `sqlift_extract(db, &et, &em)` | `char*` | Extract schema from live DB → JSON. |
 | `sqlift_diff(cur, des, &et, &em)` | `char*` | Diff two schema JSONs → plan JSON. |
-| `sqlift_apply(db, plan, destr, &et, &em)` | int | Apply plan JSON to DB. 0 = success. |
+| `sqlift_apply(db, plan, opts, &et, &em)` | int | Apply plan JSON to DB. 0 = success. `opts.allow` is a bitmask of `SQLIFT_ALLOW_*`; 0 = strictest. |
 | `sqlift_migration_version(db, &et, &em)` | `int64_t` | Migration version counter (0 if none). |
 | `sqlift_detect_redundant_indexes(json, &et, &em)` | `char*` | Detect redundant indexes → warnings JSON. |
 | `sqlift_schema_hash(json, &et, &em)` | `char*` | SHA-256 hash of a schema JSON. |
@@ -161,7 +168,7 @@ Operation type strings: `CreateTable`, `DropTable`, `RebuildTable`,
 
 - **AddColumn fast path**: When the only change is appending nullable columns (or NOT NULL with DEFAULT) at the end, uses `ALTER TABLE ADD COLUMN`.
 - **12-step table rebuild**: Any other table change uses SQLite's recommended rebuild (disable FKs, savepoint, create new, copy data, drop old, rename, recreate indexes/triggers/views, FK check, release, re-enable FKs).
-- **Destructive guard**: `sqlift_apply()` returns `SQLIFT_DESTRUCTIVE_ERROR` unless `allow_destructive` is non-zero.
+- **Strict-by-default policy**: `sqlift_apply()` denies anything beyond pure additions unless flags are set in `opts.allow`. `SQLIFT_ALLOW_REBUILD` permits SQLite's 12-step rebuild (column type change, dropping a CHECK/FK, reordering); `SQLIFT_ALLOW_DESTRUCTIVE` permits drops. Returns `SQLIFT_REBUILD_ERROR` or `SQLIFT_DESTRUCTIVE_ERROR` respectively when blocked.
 - **Drift detection**: Stores SHA-256 hash in `_sqlift_state` table after each apply. Returns `SQLIFT_DRIFT_ERROR` if schema changed outside sqlift.
 - **Breaking change detection**: `sqlift_diff()` returns `SQLIFT_BREAKING_CHANGE_ERROR` for schema changes whose success depends on existing data. Detected cases: (1) existing nullable column becomes NOT NULL, (2) new FK constraint added to existing table, (3) new CHECK constraint added to existing table, (4) new NOT NULL column without DEFAULT.
 - **No rename detection**: A removed + added column is always a drop + add.
@@ -215,7 +222,7 @@ if !plan.Empty() {
 | `Extract` | `func Extract(db *Database) (Schema, error)` | Read schema from live DB. |
 | `Diff` | `func Diff(current, desired Schema) (MigrationPlan, error)` | Pure diff. Returns `*BreakingChangeError` on unsafe changes. Populates warnings for redundant indexes. |
 | `DetectRedundantIndexes` | `func DetectRedundantIndexes(schema Schema) []Warning` | Detect prefix-duplicate and PK-duplicate indexes. |
-| `Apply` | `func Apply(db *Database, plan MigrationPlan, opts ApplyOptions) error` | Execute plan. Returns `*DestructiveError`, `*DriftError`, `*ApplyError`. |
+| `Apply` | `func Apply(db *Database, plan MigrationPlan, opts ApplyOptions) error` | Execute plan. `opts.Allow` is a bitmask (`AllowRebuild`, `AllowDestructive`, `AllowAll`); zero is strictest. Returns `*RebuildError`, `*DestructiveError`, `*DriftError`, or `*ApplyError`. |
 | `ToJSON` | `func ToJSON(plan MigrationPlan) ([]byte, error)` | Serialize plan to JSON bytes. |
 | `FromJSON` | `func FromJSON(data []byte) (MigrationPlan, error)` | Deserialize plan from JSON. Returns `*JSONError`. |
 | `ParseOpType` | `func ParseOpType(s string) (OpType, error)` | Parse string to OpType. Returns `*JSONError`. |
@@ -244,7 +251,8 @@ All implement `error` with a `Msg string` field. Use `errors.As` for type assert
 | `*DiffError` | Internal diff error |
 | `*BreakingChangeError` | Schema change is backwards-incompatible |
 | `*ApplyError` | SQL fails during `Apply()` |
-| `*DestructiveError` | Plan has destructive ops, `AllowDestructive` is false |
+| `*RebuildError` | Plan requires SQLite rebuild, `AllowRebuild` not set in `opts.Allow` |
+| `*DestructiveError` | Plan has destructive ops, `AllowDestructive` not set in `opts.Allow` |
 | `*DriftError` | Schema modified outside sqlift since last `Apply()` |
 | `*JSONError` | Invalid JSON in `FromJSON()` / `ParseOpType()` |
 
@@ -260,7 +268,7 @@ for _, op := range plan.Operations() {
 }
 
 // Allow destructive operations (drops)
-err := sqlift.Apply(db, plan, sqlift.ApplyOptions{AllowDestructive: true})
+err := sqlift.Apply(db, plan, sqlift.ApplyOptions{Allow: sqlift.AllowAll})
 
 // Handle drift
 var driftErr *sqlift.DriftError

@@ -56,10 +56,13 @@ func mustDiff(t *testing.T, current, desired Schema) MigrationPlan {
 	return plan
 }
 
-// mustApply calls Apply and fails the test on error.
+// mustApply calls Apply and fails the test on error. Defaults to allowing
+// rebuilds (matches the C++ test helper) so the many existing tests that
+// exercise rebuild-triggering diffs don't all need explicit opts. Destructive
+// ops still require an explicit opt-in.
 func mustApply(t *testing.T, db *Database, plan MigrationPlan, opts ...ApplyOptions) {
 	t.Helper()
-	opt := ApplyOptions{}
+	opt := ApplyOptions{Allow: AllowRebuild}
 	if len(opts) > 0 {
 		opt = opts[0]
 	}

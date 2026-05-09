@@ -35,6 +35,7 @@ enum sqlift_error_type {
     SQLIFT_DESTRUCTIVE_ERROR     = 7,
     SQLIFT_BREAKING_CHANGE_ERROR = 8,
     SQLIFT_JSON_ERROR            = 9,
+    SQLIFT_REBUILD_ERROR         = 10,
 };
 ```
 
@@ -51,9 +52,10 @@ heap-allocated string describing the failure. The caller must free it with
 | `SQLIFT_DIFF_ERROR` | Internal error during schema comparison |
 | `SQLIFT_APPLY_ERROR` | SQL execution failed during `sqlift_apply()` (e.g. FK violation) |
 | `SQLIFT_DRIFT_ERROR` | Schema was modified outside sqlift since the last `sqlift_apply()` |
-| `SQLIFT_DESTRUCTIVE_ERROR` | Plan has destructive operations and `allow_destructive` is 0 |
+| `SQLIFT_DESTRUCTIVE_ERROR` | Plan has destructive operations and `SQLIFT_ALLOW_DESTRUCTIVE` is not set in `opts.allow` |
 | `SQLIFT_BREAKING_CHANGE_ERROR` | Schema change depends on existing data (see [Breaking change detection](guide.md#breaking-change-detection)) |
 | `SQLIFT_JSON_ERROR` | Invalid JSON or missing fields in plan JSON |
+| `SQLIFT_REBUILD_ERROR` | Plan requires a SQLite table rebuild and `SQLIFT_ALLOW_REBUILD` is not set in `opts.allow` |
 
 ---
 
@@ -236,30 +238,72 @@ Any redundant indexes in the desired schema are reported in the plan's
 ### `sqlift_apply`
 
 ```c
-int sqlift_apply(sqlift_db* db, const char* plan_json, int allow_destructive,
+typedef struct sqlift_apply_options {
+    unsigned int allow;  // bitmask of SQLIFT_ALLOW_*
+} sqlift_apply_options;
+
+#define SQLIFT_ALLOW_REBUILD     (1u << 0)
+#define SQLIFT_ALLOW_DESTRUCTIVE (1u << 1)
+#define SQLIFT_ALLOW_NONE        0u
+#define SQLIFT_ALLOW_ALL         (SQLIFT_ALLOW_REBUILD | SQLIFT_ALLOW_DESTRUCTIVE)
+
+int sqlift_apply(sqlift_db* db, const char* plan_json,
+                 const sqlift_apply_options opts,
                  int* err_type, char** err_msg);
 ```
 
-Execute a migration plan against a live database.
+Execute a migration plan against a live database. The default policy denies
+everything except pure additions; opt in to additional behaviours by ORing
+flags into `opts.allow`.
 
 **Parameters:**
 - `db` -- an open database handle.
 - `plan_json` -- the plan JSON to execute (from `sqlift_diff()` or
   deserialized).
-- `allow_destructive` -- if 0, returns `SQLIFT_DESTRUCTIVE_ERROR` when the plan
-  contains destructive operations. Set to non-zero to permit drops.
+- `opts.allow` -- bitmask of `SQLIFT_ALLOW_*` flags. Zero (the default) only
+  permits operations that are pure additions (CREATE TABLE/INDEX/VIEW/TRIGGER,
+  ALTER TABLE ADD COLUMN). To permit a SQLite table rebuild (12-step rewrite),
+  set `SQLIFT_ALLOW_REBUILD`. To permit dropping data, set
+  `SQLIFT_ALLOW_DESTRUCTIVE`. `SQLIFT_ALLOW_ALL` enables both.
 - `err_type` -- receives the error code on failure.
 - `err_msg` -- receives a heap-allocated error message on failure.
 
 **Returns:** 0 on success, non-zero on error.
 
 **Possible errors:**
+- `SQLIFT_REBUILD_ERROR` if the plan contains a `RebuildTable` operation and
+  `SQLIFT_ALLOW_REBUILD` is not set. Rebuilds are required for any change
+  beyond appending nullable / DEFAULTed columns -- e.g. column type changes,
+  dropping a CHECK or FK constraint, reordering columns.
 - `SQLIFT_DESTRUCTIVE_ERROR` if the plan contains destructive operations and
-  `allow_destructive` is 0.
+  `SQLIFT_ALLOW_DESTRUCTIVE` is not set.
 - `SQLIFT_DRIFT_ERROR` if the database schema has been modified since the last
   `sqlift_apply()` (detected via stored hash in `_sqlift_state`).
 - `SQLIFT_APPLY_ERROR` if any SQL statement fails during execution (e.g. a
   foreign key check violation during a table rebuild).
+
+**Examples:**
+
+```c
+// Strictest policy — only additive changes allowed.
+sqlift_apply(db, plan, (sqlift_apply_options){0}, &et, &em);
+
+// Permit a column type change (forces a SQLite rebuild).
+sqlift_apply(db, plan,
+             (sqlift_apply_options){.allow = SQLIFT_ALLOW_REBUILD},
+             &et, &em);
+
+// Permit any plan, including drops.
+sqlift_apply(db, plan,
+             (sqlift_apply_options){.allow = SQLIFT_ALLOW_ALL},
+             &et, &em);
+```
+
+In C++ the cast on the compound literal can be omitted:
+
+```cpp
+sqlift_apply(db, plan, {.allow = SQLIFT_ALLOW_REBUILD}, &et, &em);
+```
 
 After successful execution, updates the schema hash and increments the
 migration version counter in `_sqlift_state`.
@@ -496,7 +540,8 @@ Returned by `sqlift_diff()`. Accepted by `sqlift_apply()`.
       "object_name": "users",
       "description": "Create table users",
       "sql": ["CREATE TABLE users (...)"],
-      "destructive": false
+      "destructive": false,
+      "requires_rebuild": false
     }
   ],
   "warnings": [
@@ -520,6 +565,7 @@ Returned by `sqlift_diff()`. Accepted by `sqlift_apply()`.
 | `description` | string | Human-readable summary |
 | `sql` | array | SQL statements to execute (in order) |
 | `destructive` | bool | Whether this operation drops data |
+| `requires_rebuild` | bool | Whether this operation requires SQLite's 12-step table rebuild (only `RebuildTable` ops set this) |
 
 **Operation types:** `CreateTable`, `DropTable`, `RebuildTable`, `AddColumn`,
 `CreateIndex`, `DropIndex`, `CreateView`, `DropView`, `CreateTrigger`,

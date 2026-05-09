@@ -62,9 +62,34 @@ func (p MigrationPlan) HasDestructiveOperations() bool {
 // Empty reports whether the plan contains no operations.
 func (p MigrationPlan) Empty() bool { return len(p.operations) == 0 }
 
-// ApplyOptions controls the behavior of [Apply].
+// AllowFlags is a bitmask of permission bits accepted by [ApplyOptions.Allow].
+// Zero is the strictest default: only pure additions are permitted.
+type AllowFlags uint32
+
+const (
+	// AllowRebuild permits RebuildTable operations (SQLite's 12-step rebuild).
+	// Required for any table change beyond appending nullable / DEFAULTed
+	// columns -- e.g. column type change, dropping a CHECK/FK constraint,
+	// reordering columns. Rebuilds are expensive on large tables.
+	AllowRebuild AllowFlags = 1 << 0
+
+	// AllowDestructive permits operations that drop data: DropTable, DropColumn
+	// (via rebuild), and DropIndex/DropView/DropTrigger when the object is
+	// removed entirely.
+	AllowDestructive AllowFlags = 1 << 1
+
+	// AllowNone is the strictest policy: no rebuilds, no destructive ops.
+	AllowNone AllowFlags = 0
+
+	// AllowAll permits every currently-defined opt-in.
+	AllowAll AllowFlags = AllowRebuild | AllowDestructive
+)
+
+// ApplyOptions controls the behavior of [Apply]. Zero value denies everything.
 type ApplyOptions struct {
-	AllowDestructive bool
+	// Allow is a bitmask of [AllowFlags]. Zero (the default) is the strictest
+	// policy.
+	Allow AllowFlags
 }
 
 // Diff compares two schemas and produces a [MigrationPlan] that migrates

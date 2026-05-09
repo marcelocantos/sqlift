@@ -169,8 +169,8 @@ func ExampleApply_destructive() {
 	var de *DestructiveError
 	fmt.Printf("blocked: %v\n", errors.As(err, &de))
 
-	// With AllowDestructive, it proceeds.
-	err = Apply(db, plan, ApplyOptions{AllowDestructive: true})
+	// With AllowDestructive set in opts.Allow, it proceeds.
+	err = Apply(db, plan, ApplyOptions{Allow: AllowDestructive})
 	if err != nil {
 		log.Fatal(err)
 	}

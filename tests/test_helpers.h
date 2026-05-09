@@ -114,9 +114,11 @@ inline std::string diff_schemas(const std::string& current, const std::string& d
     return result.str();
 }
 
-inline void apply_plan(sqlift_db* db, const std::string& plan_json, bool allow_destructive = false) {
+inline void apply_plan(sqlift_db* db, const std::string& plan_json,
+                       unsigned int allow = SQLIFT_ALLOW_REBUILD) {
     int et; char* em;
-    if (sqlift_apply(db, plan_json.c_str(), allow_destructive ? 1 : 0, &et, &em) != 0) {
+    sqlift_apply_options opts = {.allow = allow};
+    if (sqlift_apply(db, plan_json.c_str(), opts, &et, &em) != 0) {
         std::string msg = em ? em : "unknown error";
         sqlift_free(em);
         throw std::runtime_error("sqlift_apply: " + msg);
@@ -172,17 +174,21 @@ inline int diff_err(const std::string& current, const std::string& desired) {
     return et;
 }
 
-inline int apply_err(sqlift_db* db, const std::string& plan_json, bool allow_destructive = false) {
+inline int apply_err(sqlift_db* db, const std::string& plan_json,
+                     unsigned int allow = SQLIFT_ALLOW_REBUILD) {
     int et; char* em;
-    sqlift_apply(db, plan_json.c_str(), allow_destructive ? 1 : 0, &et, &em);
+    sqlift_apply_options opts = {.allow = allow};
+    sqlift_apply(db, plan_json.c_str(), opts, &et, &em);
     sqlift_free(em);
     return et;
 }
 
 inline int apply_err_msg(sqlift_db* db, const std::string& plan_json,
-                         std::string& msg, bool allow_destructive = false) {
+                         std::string& msg,
+                         unsigned int allow = SQLIFT_ALLOW_REBUILD) {
     int et; char* em;
-    sqlift_apply(db, plan_json.c_str(), allow_destructive ? 1 : 0, &et, &em);
+    sqlift_apply_options opts = {.allow = allow};
+    sqlift_apply(db, plan_json.c_str(), opts, &et, &em);
     msg = em ? em : "";
     sqlift_free(em);
     return et;

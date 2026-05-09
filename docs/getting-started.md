@@ -87,7 +87,7 @@ void migrate(sqlift_db* db) {
     // The plan is a JSON string -- print it to inspect operations.
     printf("%s\n", plan);
 
-    sqlift_apply(db, plan, 0, &err_type, &err_msg);
+    sqlift_apply(db, plan, (sqlift_apply_options){0}, &err_type, &err_msg);
 
     sqlift_free(plan);
     sqlift_free(current);
@@ -275,17 +275,23 @@ RebuildTable tasks  (destructive)
 
 Calling `Apply` without opting in raises a guard error:
 
+A `RebuildTable` op also requires opting in via `SQLIFT_ALLOW_REBUILD`, even
+when it is not destructive (e.g. a column type change), because rebuilds are
+expensive on large tables.
+
 **C:**
 ```c
-// Returns SQLIFT_DESTRUCTIVE_ERROR if the plan drops anything
-sqlift_apply(db, plan, /*allow_destructive=*/0, &err_type, &err_msg);
+// Strictest -- returns SQLIFT_REBUILD_ERROR or SQLIFT_DESTRUCTIVE_ERROR
+sqlift_apply(db, plan, (sqlift_apply_options){0}, &err_type, &err_msg);
 if (err_type == SQLIFT_DESTRUCTIVE_ERROR) {
     fprintf(stderr, "Destructive: %s\n", err_msg);
     sqlift_free(err_msg);
 }
 
-// Opt in explicitly:
-sqlift_apply(db, plan, /*allow_destructive=*/1, &err_type, &err_msg);
+// Opt in explicitly to both rebuild and drops:
+sqlift_apply(db, plan,
+             (sqlift_apply_options){.allow = SQLIFT_ALLOW_ALL},
+             &err_type, &err_msg);
 ```
 
 **Go:**
@@ -298,11 +304,15 @@ if err != nil {
     }
 }
 
-// Opt in explicitly:
-err = sqlift.Apply(db, plan, sqlift.ApplyOptions{AllowDestructive: true})
+// Opt in explicitly to both rebuild and drops:
+err = sqlift.Apply(db, plan, sqlift.ApplyOptions{Allow: sqlift.AllowAll})
 ```
 
-The guard exists so that destructive migrations require a conscious decision at the call site. You might choose to check `plan.HasDestructiveOperations()` (Go) or parse the plan JSON to check for destructive operations (C) before applying, and surface a confirmation prompt to an operator.
+The guard exists so that destructive or expensive migrations require a
+conscious decision at the call site. You might choose to check
+`plan.HasDestructiveOperations()` (Go) or parse the plan JSON to inspect each
+op's `destructive` and `requires_rebuild` flags (C) before applying, and
+surface a confirmation prompt to an operator.
 
 ---
 
@@ -320,7 +330,9 @@ The next time your application starts and runs the standard migrate routine, `Ap
 
 **C:**
 ```c
-int rc = sqlift_apply(db, plan, 1, &err_type, &err_msg);
+int rc = sqlift_apply(db, plan,
+                      (sqlift_apply_options){.allow = SQLIFT_ALLOW_ALL},
+                      &err_type, &err_msg);
 if (err_type == SQLIFT_DRIFT_ERROR) {
     fprintf(stderr, "Drift detected: %s\n", err_msg);
     // Schema has been modified outside of sqlift
@@ -330,7 +342,7 @@ if (err_type == SQLIFT_DRIFT_ERROR) {
 
 **Go:**
 ```go
-err = sqlift.Apply(db, plan, sqlift.ApplyOptions{AllowDestructive: true})
+err = sqlift.Apply(db, plan, sqlift.ApplyOptions{Allow: sqlift.AllowAll})
 if err != nil {
     var de *sqlift.DriftError
     if errors.As(err, &de) {
@@ -352,7 +364,9 @@ Plans can be serialised to JSON. This is useful for reviewing migrations in CI b
 char* plan = sqlift_diff(current, desired, &err_type, &err_msg);
 
 // Later, pass the saved JSON string to sqlift_apply():
-sqlift_apply(db, plan, 1, &err_type, &err_msg);
+sqlift_apply(db, plan,
+             (sqlift_apply_options){.allow = SQLIFT_ALLOW_ALL},
+             &err_type, &err_msg);
 sqlift_free(plan);
 ```
 
@@ -370,7 +384,7 @@ loaded, err := sqlift.FromJSON(data)
 if err != nil {
     return err
 }
-err = sqlift.Apply(db, loaded, sqlift.ApplyOptions{AllowDestructive: true})
+err = sqlift.Apply(db, loaded, sqlift.ApplyOptions{Allow: sqlift.AllowAll})
 ```
 
 A serialised plan looks like this:

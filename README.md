@@ -25,7 +25,7 @@ char* desired = sqlift_parse(
 sqlift_db* db = sqlift_db_open("app.db", 0, &err_type, &err_msg);
 char* current = sqlift_extract(db, &err_type, &err_msg);
 char* plan = sqlift_diff(current, desired, &err_type, &err_msg);
-sqlift_apply(db, plan, 0, &err_type, &err_msg);
+sqlift_apply(db, plan, (sqlift_apply_options){0}, &err_type, &err_msg);
 
 sqlift_free(plan);
 sqlift_free(current);
