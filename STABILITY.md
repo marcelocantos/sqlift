@@ -12,7 +12,7 @@ format for cross-language drift detection.
 
 ## Interaction surface catalogue
 
-Snapshot as of v0.13.0.
+Snapshot as of v0.14.0.
 
 ### C API
 
@@ -22,9 +22,9 @@ All functions use `extern "C"` linkage. Data interchange is JSON strings.
 #### Version macros
 
 ```c
-#define SQLIFT_VERSION       "0.13.0"
+#define SQLIFT_VERSION       "0.14.0"
 #define SQLIFT_VERSION_MAJOR 0
-#define SQLIFT_VERSION_MINOR 13
+#define SQLIFT_VERSION_MINOR 14
 #define SQLIFT_VERSION_PATCH 0
 ```
 
@@ -366,12 +366,15 @@ without triggering drift detection. This is verified by
 No known gaps remain. All public API surfaces have documentation, tests, and
 runnable Go examples.
 
-**Settling threshold**: ~70 surface items → N=4. This release (v0.13.0)
-introduces a breaking change (`sqlift_apply` signature changed: third
-parameter is now `const sqlift_apply_options opts`, replacing
-`int allow_destructive`; default policy is now strict and rejects rebuilds
-unless `SQLIFT_ALLOW_REBUILD` is set). The counter resets. Four consecutive
-minor releases with no breaking changes are needed before 1.0 eligibility.
+**Settling threshold**: ~70 surface items → N=4. This release (v0.14.0)
+introduces a behavior change: `BreakingChangeError` moved from a diff-time
+throw to an apply-time policy gate. Diff() now produces a plan whose
+RebuildTable ops carry `data_dependent: true`; Apply() rejects them unless
+`SQLIFT_ALLOW_DATA_DEPENDENT` is set. The error type is unchanged; the
+call-site differs. Two new opt-in flags (`SQLIFT_ALLOW_LOOSEN`,
+`SQLIFT_ALLOW_DATA_DEPENDENT`) are additive. The counter resets. Four
+consecutive minor releases with no breaking changes are needed before 1.0
+eligibility.
 
 ## Out of scope for 1.0
 
