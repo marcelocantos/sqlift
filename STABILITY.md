@@ -12,7 +12,7 @@ format for cross-language drift detection.
 
 ## Interaction surface catalogue
 
-Snapshot as of v0.12.0.
+Snapshot as of v0.13.0.
 
 ### C API
 
@@ -22,9 +22,9 @@ All functions use `extern "C"` linkage. Data interchange is JSON strings.
 #### Version macros
 
 ```c
-#define SQLIFT_VERSION       "0.12.0"
+#define SQLIFT_VERSION       "0.13.0"
 #define SQLIFT_VERSION_MAJOR 0
-#define SQLIFT_VERSION_MINOR 12
+#define SQLIFT_VERSION_MINOR 13
 #define SQLIFT_VERSION_PATCH 0
 ```
 
@@ -44,6 +44,7 @@ enum sqlift_error_type {
     SQLIFT_DESTRUCTIVE_ERROR     = 7,
     SQLIFT_BREAKING_CHANGE_ERROR = 8,
     SQLIFT_JSON_ERROR            = 9,
+    SQLIFT_REBUILD_ERROR         = 10,
 };
 ```
 
@@ -356,10 +357,12 @@ without triggering drift detection. This is verified by
 No known gaps remain. All public API surfaces have documentation, tests, and
 runnable Go examples.
 
-**Settling threshold**: ~70 surface items → N=4. This release (v0.12.0)
-introduces a breaking change (C++ public API replaced with C-only API), so
-the counter resets. Four consecutive minor releases with no breaking changes
-are needed before 1.0 eligibility.
+**Settling threshold**: ~70 surface items → N=4. This release (v0.13.0)
+introduces a breaking change (`sqlift_apply` signature changed: third
+parameter is now `const sqlift_apply_options opts`, replacing
+`int allow_destructive`; default policy is now strict and rejects rebuilds
+unless `SQLIFT_ALLOW_REBUILD` is set). The counter resets. Four consecutive
+minor releases with no breaking changes are needed before 1.0 eligibility.
 
 ## Out of scope for 1.0
 
