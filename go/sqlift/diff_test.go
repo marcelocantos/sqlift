@@ -4,7 +4,6 @@
 package sqlift
 
 import (
-	"errors"
 	"testing"
 )
 
@@ -84,13 +83,12 @@ func TestDiff(t *testing.T) {
 		}
 	})
 
-	t.Run("diff add NOT NULL column without default - breaking change", func(t *testing.T) {
+	t.Run("diff flags NOT NULL column without default as data-dependent", func(t *testing.T) {
 		current := mustParse(t, "CREATE TABLE users (id INTEGER PRIMARY KEY);")
 		desired := mustParse(t, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL);")
-		_, err := Diff(current, desired)
-		var breakErr *BreakingChangeError
-		if !errors.As(err, &breakErr) {
-			t.Fatal("expected BreakingChangeError")
+		plan := mustDiff(t, current, desired)
+		if !hasDataDependent(plan) {
+			t.Error("expected data-dependent op")
 		}
 	})
 
@@ -123,13 +121,12 @@ func TestDiff(t *testing.T) {
 		}
 	})
 
-	t.Run("diff change column nullability - breaking change", func(t *testing.T) {
+	t.Run("diff flags column nullability tightening as data-dependent", func(t *testing.T) {
 		current := mustParse(t, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);")
 		desired := mustParse(t, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL);")
-		_, err := Diff(current, desired)
-		var breakErr *BreakingChangeError
-		if !errors.As(err, &breakErr) {
-			t.Fatal("expected BreakingChangeError")
+		plan := mustDiff(t, current, desired)
+		if !hasDataDependent(plan) {
+			t.Error("expected data-dependent op")
 		}
 	})
 
@@ -225,47 +222,43 @@ func TestDiff(t *testing.T) {
 		}
 	})
 
-	t.Run("diff rejects nullable to NOT NULL on existing column", func(t *testing.T) {
+	t.Run("diff flags nullable to NOT NULL on existing column", func(t *testing.T) {
 		current := mustParse(t, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);")
 		desired := mustParse(t, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL);")
-		_, err := Diff(current, desired)
-		var breakErr *BreakingChangeError
-		if !errors.As(err, &breakErr) {
-			t.Fatal("expected BreakingChangeError")
+		plan := mustDiff(t, current, desired)
+		if !hasDataDependent(plan) {
+			t.Error("expected data-dependent op")
 		}
 	})
 
-	t.Run("diff rejects nullable to NOT NULL even with DEFAULT", func(t *testing.T) {
+	t.Run("diff flags nullable to NOT NULL with DEFAULT", func(t *testing.T) {
 		current := mustParse(t, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);")
 		desired := mustParse(t, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL DEFAULT 'unknown');")
-		_, err := Diff(current, desired)
-		var breakErr *BreakingChangeError
-		if !errors.As(err, &breakErr) {
-			t.Fatal("expected BreakingChangeError")
+		plan := mustDiff(t, current, desired)
+		if !hasDataDependent(plan) {
+			t.Error("expected data-dependent op")
 		}
 	})
 
-	t.Run("diff rejects adding FK to existing table", func(t *testing.T) {
+	t.Run("diff flags adding FK to existing table", func(t *testing.T) {
 		current := mustParse(t,
 			"CREATE TABLE users (id INTEGER PRIMARY KEY);"+
 				"CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER);")
 		desired := mustParse(t,
 			"CREATE TABLE users (id INTEGER PRIMARY KEY);"+
 				"CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER REFERENCES users(id));")
-		_, err := Diff(current, desired)
-		var breakErr *BreakingChangeError
-		if !errors.As(err, &breakErr) {
-			t.Fatal("expected BreakingChangeError")
+		plan := mustDiff(t, current, desired)
+		if !hasDataDependent(plan) {
+			t.Error("expected data-dependent op")
 		}
 	})
 
-	t.Run("diff rejects new NOT NULL column without DEFAULT", func(t *testing.T) {
+	t.Run("diff flags new NOT NULL column without DEFAULT", func(t *testing.T) {
 		current := mustParse(t, "CREATE TABLE users (id INTEGER PRIMARY KEY);")
 		desired := mustParse(t, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL);")
-		_, err := Diff(current, desired)
-		var breakErr *BreakingChangeError
-		if !errors.As(err, &breakErr) {
-			t.Fatal("expected BreakingChangeError")
+		plan := mustDiff(t, current, desired)
+		if !hasDataDependent(plan) {
+			t.Error("expected data-dependent op")
 		}
 	})
 
@@ -307,13 +300,12 @@ func TestDiff(t *testing.T) {
 		}
 	})
 
-	t.Run("diff rejects adding CHECK constraint to existing table", func(t *testing.T) {
+	t.Run("diff flags adding CHECK constraint to existing table", func(t *testing.T) {
 		current := mustParse(t, "CREATE TABLE items (id INTEGER PRIMARY KEY, price REAL);")
 		desired := mustParse(t, "CREATE TABLE items (id INTEGER PRIMARY KEY, price REAL, CHECK (price > 0));")
-		_, err := Diff(current, desired)
-		var breakErr *BreakingChangeError
-		if !errors.As(err, &breakErr) {
-			t.Fatal("expected BreakingChangeError")
+		plan := mustDiff(t, current, desired)
+		if !hasDataDependent(plan) {
+			t.Error("expected data-dependent op")
 		}
 	})
 

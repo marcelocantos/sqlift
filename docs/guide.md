@@ -226,6 +226,8 @@ COLUMN, etc.) are permitted. To allow more invasive operations, set bits in
 |---|---|
 | `SQLIFT_ALLOW_REBUILD` / `AllowRebuild` | SQLite's 12-step table rebuild (column type change, dropping a CHECK/FK, reordering) |
 | `SQLIFT_ALLOW_DESTRUCTIVE` / `AllowDestructive` | Drops: tables, columns (via rebuild), indexes, views, triggers |
+| `SQLIFT_ALLOW_LOOSEN` / `AllowLoosen` | Pure-loosening rebuilds (drop CHECK/FK, NOT NULL→nullable). Lets you express a backwards-compatible-only policy |
+| `SQLIFT_ALLOW_DATA_DEPENDENT` / `AllowDataDependent` | Changes whose success depends on existing data (nullable→NOT NULL, new FK/CHECK on existing table, new NOT NULL column without DEFAULT). Combine with `AllowRebuild` |
 | `SQLIFT_ALLOW_ALL` / `AllowAll` | Everything currently defined |
 
 This is a safety net: in development you typically allow most things, while in
@@ -263,11 +265,13 @@ err = sqlift.Apply(db, plan, sqlift.ApplyOptions{Allow: sqlift.AllowRebuild})
 err = sqlift.Apply(db, plan, sqlift.ApplyOptions{Allow: sqlift.AllowAll})
 ```
 
-## Breaking change detection
+## Data-dependent changes
 
-`diff()` detects schema changes whose success depends on existing data --
-changes that might work on an empty database but fail on a populated one. When
-detected, it reports a `BreakingChangeError` instead of producing a plan.
+`diff()` flags schema changes whose success depends on existing data --
+changes that might work on an empty database but fail on a populated one --
+by tagging the resulting `RebuildTable` op with `data_dependent: true`.
+`apply()` rejects plans containing such ops with `BreakingChangeError`
+unless `SQLIFT_ALLOW_DATA_DEPENDENT` (C) / `AllowDataDependent` (Go) is set.
 
 There are four detected cases:
 
@@ -288,29 +292,41 @@ There are four detected cases:
    with no DEFAULT value. Existing rows cannot be populated -- SQLite has no
    value to put in the new column.
 
-**C:**
+**Inspecting the plan:**
 
 ```c
-char* plan = sqlift_diff(current, desired, &err_type, &err_msg);
-if (err_type == SQLIFT_BREAKING_CHANGE_ERROR) {
-    fprintf(stderr, "%s\n", err_msg);
-    sqlift_free(err_msg);
-}
+// C: plan JSON ops carry a `data_dependent` boolean.
 ```
-
-**Go:**
 
 ```go
-plan, err := sqlift.Diff(current, desired)
-var breakErr *sqlift.BreakingChangeError
-if errors.As(err, &breakErr) {
-    log.Println(breakErr.Msg)
+// Go:
+plan, _ := sqlift.Diff(current, desired)
+for _, op := range plan.Operations() {
+    if op.DataDependent {
+        log.Printf("data-dependent: %s", op.Description)
+    }
 }
 ```
 
-The recommended workaround is a two-step migration: first add a new table or
-column with the desired schema and migrate data at the application level, then
-retire the old structure in a subsequent release.
+**Opting in (when you know your data is clean):**
+
+```c
+sqlift_apply(db, plan,
+             (sqlift_apply_options){.allow = SQLIFT_ALLOW_REBUILD
+                                            | SQLIFT_ALLOW_DATA_DEPENDENT},
+             &err_type, &err_msg);
+```
+
+```go
+sqlift.Apply(db, plan, sqlift.ApplyOptions{
+    Allow: sqlift.AllowRebuild | sqlift.AllowDataDependent,
+})
+```
+
+A common workaround for the cases where you can't guarantee clean data is
+the two-step migration: first add a new table or column with the desired
+schema and migrate data at the application level, then retire the old
+structure in a subsequent release.
 
 ## Redundant index detection
 
@@ -599,9 +615,9 @@ Errors are reported via error codes in C and error values in Go.
 | `SQLIFT_DIFF_ERROR` | Schema comparison encounters an internal error |
 | `SQLIFT_APPLY_ERROR` | SQL execution fails during `sqlift_apply()` (e.g. FK violation) |
 | `SQLIFT_DESTRUCTIVE_ERROR` | Plan has destructive ops and `SQLIFT_ALLOW_DESTRUCTIVE` is not set |
-| `SQLIFT_REBUILD_ERROR` | Plan requires a SQLite table rebuild and `SQLIFT_ALLOW_REBUILD` is not set |
+| `SQLIFT_REBUILD_ERROR` | Plan requires a SQLite rebuild and neither `SQLIFT_ALLOW_REBUILD` nor (for pure-loosening rebuilds) `SQLIFT_ALLOW_LOOSEN` is set |
 | `SQLIFT_DRIFT_ERROR` | Schema was modified outside of sqlift since last apply |
-| `SQLIFT_BREAKING_CHANGE_ERROR` | Schema change depends on existing data |
+| `SQLIFT_BREAKING_CHANGE_ERROR` | Plan has a data-dependent change and `SQLIFT_ALLOW_DATA_DEPENDENT` is not set |
 | `SQLIFT_JSON_ERROR` | Invalid JSON or missing fields in plan JSON |
 
 On failure, the accompanying `char** err_msg` output is set to a heap-allocated

@@ -199,6 +199,101 @@ func TestApply(t *testing.T) {
 		}
 	})
 
+	t.Run("apply rejects data-dependent change without flag", func(t *testing.T) {
+		db := openMemory(t)
+		mustExec(t, db, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);")
+
+		desired := mustParse(t,
+			"CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL);")
+		current := mustExtract(t, db)
+		plan := mustDiff(t, current, desired)
+
+		if !hasDataDependent(plan) {
+			t.Fatal("expected data-dependent op in plan")
+		}
+		err := Apply(db, plan, ApplyOptions{Allow: AllowRebuild})
+		var bce *BreakingChangeError
+		if !errors.As(err, &bce) {
+			t.Errorf("expected *BreakingChangeError, got %T: %v", err, err)
+		}
+	})
+
+	t.Run("apply data-dependent on empty table with flag succeeds", func(t *testing.T) {
+		db := openMemory(t)
+		mustExec(t, db, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);")
+		// Empty table -- the tightening will succeed.
+
+		desired := mustParse(t,
+			"CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL);")
+		current := mustExtract(t, db)
+		plan := mustDiff(t, current, desired)
+
+		mustApply(t, db, plan, ApplyOptions{Allow: AllowRebuild | AllowDataDependent})
+
+		after := mustExtract(t, db)
+		users, ok := after.Tables["users"]
+		if !ok {
+			t.Fatal("missing users table after apply")
+		}
+		nameNotNull := false
+		for _, col := range users.Columns {
+			if col.Name == "name" && col.NotNull {
+				nameNotNull = true
+			}
+		}
+		if !nameNotNull {
+			t.Error("expected name to be NOT NULL after apply")
+		}
+	})
+
+	t.Run("apply pure-loosen rebuild with allow_loosen succeeds", func(t *testing.T) {
+		db := openMemory(t)
+		mustExec(t, db,
+			"CREATE TABLE items (id INTEGER PRIMARY KEY, price REAL,"+
+				" CHECK (price > 0));")
+		mustExec(t, db, "INSERT INTO items (id, price) VALUES (1, 9.99);")
+
+		// Drop the CHECK -- pure loosening.
+		desired := mustParse(t,
+			"CREATE TABLE items (id INTEGER PRIMARY KEY, price REAL);")
+		current := mustExtract(t, db)
+		plan := mustDiff(t, current, desired)
+
+		if !hasLoosensOnly(plan) {
+			t.Fatal("expected loosens_only op in plan")
+		}
+		// allow_loosen alone -- no allow_rebuild needed.
+		mustApply(t, db, plan, ApplyOptions{Allow: AllowLoosen})
+
+		n, err := db.QueryInt64("SELECT COUNT(*) FROM items")
+		if err != nil {
+			t.Fatalf("QueryInt64: %v", err)
+		}
+		if n != 1 {
+			t.Errorf("expected 1 row preserved, got %d", n)
+		}
+	})
+
+	t.Run("apply mixed rebuild rejected by allow_loosen alone", func(t *testing.T) {
+		db := openMemory(t)
+		mustExec(t, db, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);")
+
+		// Column type change -- not pure loosening.
+		desired := mustParse(t,
+			"CREATE TABLE users (id INTEGER PRIMARY KEY, name BLOB);")
+		current := mustExtract(t, db)
+		plan := mustDiff(t, current, desired)
+
+		if hasLoosensOnly(plan) {
+			t.Fatal("type change should not be flagged loosens_only")
+		}
+		err := Apply(db, plan, ApplyOptions{Allow: AllowLoosen})
+		var re *RebuildError
+		if !errors.As(err, &re) {
+			t.Errorf("expected *RebuildError, got %T: %v", err, err)
+		}
+	})
+
 	t.Run("apply updates state hash", func(t *testing.T) {
 		db := openMemory(t)
 		empty := mustExtract(t, db)

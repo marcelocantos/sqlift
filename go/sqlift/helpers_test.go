@@ -70,3 +70,23 @@ func mustApply(t *testing.T, db *Database, plan MigrationPlan, opts ...ApplyOpti
 		t.Fatalf("Apply failed: %v", err)
 	}
 }
+
+// hasDataDependent reports whether any op in the plan is data-dependent.
+func hasDataDependent(plan MigrationPlan) bool {
+	for _, op := range plan.Operations() {
+		if op.DataDependent {
+			return true
+		}
+	}
+	return false
+}
+
+// hasLoosensOnly reports whether any op in the plan is a pure-loosening rebuild.
+func hasLoosensOnly(plan MigrationPlan) bool {
+	for _, op := range plan.Operations() {
+		if op.LoosensOnly {
+			return true
+		}
+	}
+	return false
+}

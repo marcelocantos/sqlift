@@ -46,6 +46,15 @@ enum sqlift_error_type {
     SQLIFT_JSON_ERROR            = 9,
     SQLIFT_REBUILD_ERROR         = 10,
 };
+
+// Atomic permission bits accepted in sqlift_apply_options.allow.
+#define SQLIFT_ALLOW_REBUILD        (1u << 0)
+#define SQLIFT_ALLOW_DESTRUCTIVE    (1u << 1)
+#define SQLIFT_ALLOW_LOOSEN         (1u << 2)
+#define SQLIFT_ALLOW_DATA_DEPENDENT (1u << 3)
+#define SQLIFT_ALLOW_NONE           0u
+#define SQLIFT_ALLOW_ALL            (SQLIFT_ALLOW_REBUILD | SQLIFT_ALLOW_DESTRUCTIVE \
+                                     | SQLIFT_ALLOW_LOOSEN | SQLIFT_ALLOW_DATA_DEPENDENT)
 ```
 
 **Stable.** New error codes may be added (additive). Existing codes and their

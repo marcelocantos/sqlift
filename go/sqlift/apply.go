@@ -10,16 +10,20 @@ import "unsafe"
 
 // Apply executes plan against db.
 //
-// Steps:
-//  1. If the plan is empty, return nil immediately.
-//  2. If the plan contains rebuild operations and opts.Allow lacks
-//     [AllowRebuild], return a [RebuildError].
-//  3. If the plan contains destructive operations and opts.Allow lacks
-//     [AllowDestructive], return a [DestructiveError].
-//  4. Extract the current schema and compare the stored hash with the actual
+// Policy gates fire in order, per-operation. For each op:
+//   - If RequiresRebuild and opts.Allow lacks [AllowRebuild] (and the op
+//     is not a pure-loosening rebuild covered by [AllowLoosen]), return
+//     [RebuildError].
+//   - If DataDependent and opts.Allow lacks [AllowDataDependent], return
+//     [BreakingChangeError].
+//   - If Destructive and opts.Allow lacks [AllowDestructive], return
+//     [DestructiveError].
+//
+// After gates pass:
+//  1. Extract the current schema and compare the stored hash with the actual
 //     hash. If they differ, return a [DriftError].
-//  5. Execute each operation's SQL statements.
-//  6. On success: extract the updated schema and store its hash.
+//  2. Execute each operation's SQL statements.
+//  3. On success: extract the updated schema and store its hash.
 func Apply(db *Database, plan MigrationPlan, opts ApplyOptions) error {
 	planJSON, err := ToJSON(plan)
 	if err != nil {

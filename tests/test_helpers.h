@@ -197,3 +197,21 @@ inline int apply_err_msg(sqlift_db* db, const std::string& plan_json,
 inline std::string empty_schema() {
     return R"({"tables":{},"indexes":{},"views":{},"triggers":{}})";
 }
+
+// Returns true if any operation in the plan JSON is flagged data_dependent.
+inline bool plan_has_data_dependent(const std::string& plan_json) {
+    auto plan = json::parse(plan_json);
+    if (!plan.contains("operations")) return false;
+    for (const auto& op : plan["operations"])
+        if (op.value("data_dependent", false)) return true;
+    return false;
+}
+
+// Returns true if any operation in the plan JSON is flagged loosens_only.
+inline bool plan_has_loosens_only(const std::string& plan_json) {
+    auto plan = json::parse(plan_json);
+    if (!plan.contains("operations")) return false;
+    for (const auto& op : plan["operations"])
+        if (op.value("loosens_only", false)) return true;
+    return false;
+}

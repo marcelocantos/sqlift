@@ -249,23 +249,34 @@ func ExampleDetectRedundantIndexes() {
 	// Index 'idx_name' on table 'users' is redundant: columns are a prefix of index 'idx_name_email'
 }
 
-func ExampleDiff_breakingChange() {
+func ExampleApplyOptions_allowDataDependent() {
 	current, err := Parse("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);")
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	// Changing nullable name to NOT NULL is a breaking change.
+	// Changing nullable name to NOT NULL is a data-dependent change:
+	// it succeeds on an empty / clean database, fails elsewhere.
 	desired, err := Parse("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL);")
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	_, err = Diff(current, desired)
-	var bce *BreakingChangeError
-	fmt.Printf("breaking: %v\n", errors.As(err, &bce))
+	plan, err := Diff(current, desired)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	dataDependent := false
+	for _, op := range plan.Operations() {
+		if op.DataDependent {
+			dataDependent = true
+			break
+		}
+	}
+	fmt.Printf("data-dependent: %v\n", dataDependent)
 	// Output:
-	// breaking: true
+	// data-dependent: true
 }
 
 func ExampleToJSON() {

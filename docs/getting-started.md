@@ -221,16 +221,19 @@ sqlift applies operations in a fixed order that keeps the database consistent: d
 
 ## Iteration 4: Rebuilds and breaking changes
 
-### 4a: Breaking change caught
+### 4a: Data-dependent change caught at apply time
 
-The data team wants `description` to be mandatory. You update the column definition to `description TEXT NOT NULL`. When you call `Diff`, you get an error before any database is touched:
+The data team wants `description` to be mandatory. You update the column definition to `description TEXT NOT NULL`. `Diff` produces a plan, but the rebuild op carries a `data_dependent: true` flag — and `Apply` refuses by default:
 
 **C:**
 ```c
 char* plan = sqlift_diff(current, desired, &err_type, &err_msg);
+// plan now contains a RebuildTable op with data_dependent: true
+sqlift_apply(db, plan,
+             (sqlift_apply_options){.allow = SQLIFT_ALLOW_REBUILD},
+             &err_type, &err_msg);
 if (err_type == SQLIFT_BREAKING_CHANGE_ERROR) {
     fprintf(stderr, "Breaking change: %s\n", err_msg);
-    // Breaking change: column tasks.description: nullable -> NOT NULL
     sqlift_free(err_msg);
 }
 ```
@@ -239,16 +242,24 @@ if (err_type == SQLIFT_BREAKING_CHANGE_ERROR) {
 ```go
 plan, err := sqlift.Diff(current, desired)
 if err != nil {
-    var bce *sqlift.BreakingChangeError
-    if errors.As(err, &bce) {
-        fmt.Println("Breaking change:", bce.Msg)
-        // Breaking change: column tasks.description: nullable -> NOT NULL
-    }
     return err
+}
+err = sqlift.Apply(db, plan, sqlift.ApplyOptions{Allow: sqlift.AllowRebuild})
+var bce *sqlift.BreakingChangeError
+if errors.As(err, &bce) {
+    fmt.Println("Breaking change:", bce.Msg)
 }
 ```
 
-`Diff` rejects this change because it is **data-dependent**: the operation will succeed on a database where every existing task already has a description, but fail silently or catastrophically on one that doesn't. sqlift refuses to generate a plan whose correctness depends on your data. If you genuinely need this change, the right approach is to backfill NULLs first, then alter the schema — documented in [guide.md](guide.md).
+`Apply` rejects this change because it is **data-dependent**: the operation will succeed on a database where every existing task already has a description, but fail catastrophically on one that doesn't. sqlift refuses by default to apply a plan whose correctness depends on your data. If you've verified the data is clean (or are running against an empty database), opt in:
+
+```go
+sqlift.Apply(db, plan, sqlift.ApplyOptions{
+    Allow: sqlift.AllowRebuild | sqlift.AllowDataDependent,
+})
+```
+
+Otherwise, the right approach is to backfill NULLs first, then alter the schema — documented in [guide.md](guide.md).
 
 ### 4b: Table rebuild with destructive guard
 

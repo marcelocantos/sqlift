@@ -102,8 +102,11 @@ Operations are ordered to preserve referential integrity:
 
 Views and triggers within each phase are ordered topologically by dependency.
 
-`Diff` rejects schema changes whose success depends on existing data. The
-following are detected as breaking:
+`Diff` is a pure function and never throws on policy concerns. Schema changes
+whose success depends on existing data are tagged on the resulting plan
+operations as `DataDependent` rather than rejected outright; the rejection
+fires at `Apply` time unless `AllowDataDependent` is set. The four
+data-dependent cases are:
 
 - An existing nullable column becomes `NOT NULL`.
 - A new foreign key constraint is added to an existing table.
@@ -119,7 +122,8 @@ transform `current` into `desired`. Returns an empty plan if the schemas are
 structurally identical. Any redundant indexes in the desired schema are
 reported via `plan.Warnings()`.
 
-**Errors:** `*BreakingChangeError` if any breaking change is detected.
+**Errors:** `*DiffError` for internal failures (rare). Data-dependent changes
+do not error here; inspect `op.DataDependent` on the plan operations.
 
 **Example:**
 
@@ -168,21 +172,29 @@ Execute a migration plan against a live database. If the plan is empty,
 
 **Behaviour:**
 
-1. If the plan contains a `RebuildTable` operation and `opts.Allow` does not
-   include [`AllowRebuild`](#allowflags), return `*RebuildError` immediately.
-2. If the plan contains destructive operations and `opts.Allow` does not
-   include `AllowDestructive`, return `*DestructiveError` immediately.
-3. Extract the current schema and read the stored hash from `_sqlift_state`.
+Policy gates fire per-operation, in order:
+
+1. If the op `RequiresRebuild` and `opts.Allow` covers neither
+   [`AllowRebuild`](#allowflags) nor (when the op is `LoosensOnly`)
+   [`AllowLoosen`](#allowflags), return `*RebuildError` immediately.
+2. If the op is `DataDependent` and `opts.Allow` does not include
+   [`AllowDataDependent`](#allowflags), return `*BreakingChangeError`.
+3. If the op is `Destructive` and `opts.Allow` does not include
+   [`AllowDestructive`](#allowflags), return `*DestructiveError`.
+
+After gates pass:
+
+1. Extract the current schema and read the stored hash from `_sqlift_state`.
    If a stored hash exists and differs from the current schema hash, return
    `*DriftError` (the schema was modified outside sqlift).
-4. Record the current `PRAGMA foreign_keys` state so it can be restored on
+2. Record the current `PRAGMA foreign_keys` state so it can be restored on
    failure.
-5. Execute each operation's SQL statements. `PRAGMA foreign_key_check`
+3. Execute each operation's SQL statements. `PRAGMA foreign_key_check`
    statements are handled specially: any returned rows indicate violations
    and cause `*ApplyError`.
-6. On any error: roll back the `sqlift_rebuild` savepoint (if open), release
+4. On any error: roll back the `sqlift_rebuild` savepoint (if open), release
    it, restore the FK enforcement state, and return the original error.
-7. On success: extract the updated schema, store its SHA-256 hash in
+5. On success: extract the updated schema, store its SHA-256 hash in
    `_sqlift_state`, and increment the migration version counter.
 
 **Parameters:**
@@ -191,8 +203,10 @@ Execute a migration plan against a live database. If the plan is empty,
 - `opts` -- options controlling behaviour (see `ApplyOptions`).
 
 **Errors:**
-- `*RebuildError` -- plan requires SQLite's table rebuild and `AllowRebuild`
-  is not set.
+- `*RebuildError` -- plan requires SQLite's table rebuild and neither
+  `AllowRebuild` nor (for pure-loosening rebuilds) `AllowLoosen` is set.
+- `*BreakingChangeError` -- plan has a data-dependent change and
+  `AllowDataDependent` is not set.
 - `*DestructiveError` -- plan has destructive operations and
   `AllowDestructive` is not set.
 - `*DriftError` -- schema was modified outside sqlift since the last `Apply`.
@@ -205,10 +219,13 @@ Execute a migration plan against a live database. If the plan is empty,
 err := sqlift.Apply(db, plan, sqlift.ApplyOptions{}) // strictest defaults
 if err != nil {
     var re *sqlift.RebuildError
+    var bce *sqlift.BreakingChangeError
     var de *sqlift.DestructiveError
     switch {
     case errors.As(err, &re):
         log.Fatal("rebuild migration requires AllowRebuild opt-in")
+    case errors.As(err, &bce):
+        log.Fatal("data-dependent migration requires AllowDataDependent opt-in")
     case errors.As(err, &de):
         log.Fatal("destructive migration requires AllowDestructive opt-in")
     default:
@@ -461,11 +478,14 @@ once created; the internal slice is not exposed directly.
 
 ```go
 type Operation struct {
-    Type        OpType
-    ObjectName  string
-    Description string
-    SQL         []string
-    Destructive bool
+    Type            OpType
+    ObjectName      string
+    Description     string
+    SQL             []string
+    Destructive     bool
+    RequiresRebuild bool
+    LoosensOnly     bool
+    DataDependent   bool
 }
 ```
 
@@ -480,6 +500,14 @@ A single migration step.
   recreate indexes/triggers, FK check, release, re-enable FKs).
 - `Destructive` -- `true` if this operation drops data (dropped tables,
   dropped indexes, table rebuilds that remove columns).
+- `RequiresRebuild` -- `true` for `RebuildTable` operations. Gated by
+  [`AllowRebuild`](#allowflags).
+- `LoosensOnly` -- `true` when every change in this rebuild is a strict
+  relaxation (drop CHECK/FK, NOT NULL becomes nullable). Permits the op
+  under [`AllowLoosen`](#allowflags) without [`AllowRebuild`](#allowflags).
+- `DataDependent` -- `true` when the op's success depends on existing data
+  (nullable→NOT NULL, new FK or CHECK on an existing table, new NOT NULL
+  column without DEFAULT). Gated by [`AllowDataDependent`](#allowflags).
 
 ---
 
@@ -555,10 +583,12 @@ type ApplyOptions struct {
 type AllowFlags uint32
 
 const (
-    AllowRebuild     AllowFlags = 1 << 0
-    AllowDestructive AllowFlags = 1 << 1
-    AllowNone        AllowFlags = 0
-    AllowAll         AllowFlags = AllowRebuild | AllowDestructive
+    AllowRebuild       AllowFlags = 1 << 0
+    AllowDestructive   AllowFlags = 1 << 1
+    AllowLoosen        AllowFlags = 1 << 2
+    AllowDataDependent AllowFlags = 1 << 3
+    AllowNone          AllowFlags = 0
+    AllowAll           AllowFlags = AllowRebuild | AllowDestructive | AllowLoosen | AllowDataDependent
 )
 ```
 
@@ -569,6 +599,16 @@ const (
 - `AllowDestructive` -- permit operations that drop data: `DropTable`,
   `DropColumn` (via rebuild), and `DropIndex` / `DropView` / `DropTrigger`
   when the object is removed entirely.
+- `AllowLoosen` -- permit rebuilds whose only changes are strict relaxations
+  of existing constraints (drop a CHECK or FK, NOT NULL becomes nullable).
+  Independent of `AllowRebuild`: a pure-loosening rebuild passes either gate.
+  Use this for "backwards-compatible only" policies -- old readers and writers
+  keep working.
+- `AllowDataDependent` -- permit changes whose success depends on existing
+  data: nullable→NOT NULL, new FK or CHECK on an existing table, new NOT NULL
+  column without DEFAULT. These can succeed on an empty / known-clean
+  database and fail elsewhere; combine with `AllowRebuild` (the data-
+  dependent change still requires the underlying rebuild).
 - `AllowNone` -- explicit name for the zero value (no opt-ins).
 - `AllowAll` -- enable every currently-defined opt-in.
 
@@ -674,7 +714,7 @@ assertions.
 | `*DriftError` | `Apply` | Schema was modified outside sqlift since the last `Apply`. |
 | `*DestructiveError` | `Apply` | Plan has destructive operations and `AllowDestructive` is not set in `opts.Allow`. |
 | `*RebuildError` | `Apply` | Plan requires SQLite's table rebuild and `AllowRebuild` is not set in `opts.Allow`. |
-| `*BreakingChangeError` | `Diff` | Desired schema contains a data-dependent change (nullable→NOT NULL, new FK, new CHECK, new NOT NULL column without DEFAULT). |
+| `*BreakingChangeError` | `Apply` | Plan contains a data-dependent change and `AllowDataDependent` is not set in `opts.Allow`. (Previously thrown by `Diff`; now an apply-time policy gate.) |
 | `*JSONError` | `FromJSON`, `ParseOpType` | JSON parsing or validation failure. |
 
 **Example using `errors.As`:**
@@ -682,12 +722,7 @@ assertions.
 ```go
 plan, err := sqlift.Diff(current, desired)
 if err != nil {
-    var bce *sqlift.BreakingChangeError
-    if errors.As(err, &bce) {
-        fmt.Fprintf(os.Stderr, "breaking change: %s\n", bce.Msg)
-        os.Exit(1)
-    }
-    log.Fatal(err)
+    log.Fatal(err) // Diff errors are rare and structural
 }
 
 applyErr := sqlift.Apply(db, plan, sqlift.ApplyOptions{})
@@ -695,11 +730,14 @@ if applyErr != nil {
     var drift *sqlift.DriftError
     var destr *sqlift.DestructiveError
     var rb *sqlift.RebuildError
+    var bce *sqlift.BreakingChangeError
     switch {
     case errors.As(applyErr, &drift):
         fmt.Fprintln(os.Stderr, "schema drift detected — manual intervention required")
     case errors.As(applyErr, &rb):
-        fmt.Fprintln(os.Stderr, "re-run with Allow: AllowRebuild to proceed")
+        fmt.Fprintln(os.Stderr, "re-run with Allow: AllowRebuild (or AllowLoosen) to proceed")
+    case errors.As(applyErr, &bce):
+        fmt.Fprintln(os.Stderr, "re-run with Allow: AllowDataDependent to proceed")
     case errors.As(applyErr, &destr):
         fmt.Fprintln(os.Stderr, "re-run with Allow: AllowDestructive to proceed")
     default:

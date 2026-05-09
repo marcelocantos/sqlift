@@ -34,6 +34,18 @@ type Operation struct {
 	Description string
 	SQL         []string
 	Destructive bool
+	// RequiresRebuild is true for RebuildTable operations (SQLite's
+	// 12-step rebuild). Gated by [AllowRebuild].
+	RequiresRebuild bool
+	// LoosensOnly is true when every change in this op is a strict
+	// relaxation of an existing constraint (drop CHECK/FK, NOT NULL
+	// becomes nullable). Only ever set on rebuild ops; permits the op
+	// under [AllowLoosen] without [AllowRebuild].
+	LoosensOnly bool
+	// DataDependent is true when this op's success depends on existing
+	// data: nullable->NOT NULL, new FK or CHECK on an existing table,
+	// new NOT NULL column without DEFAULT. Gated by [AllowDataDependent].
+	DataDependent bool
 }
 
 // MigrationPlan holds an ordered list of operations produced by [Diff].
@@ -78,11 +90,26 @@ const (
 	// removed entirely.
 	AllowDestructive AllowFlags = 1 << 1
 
+	// AllowLoosen permits rebuilds whose only changes are strict relaxations
+	// of existing constraints (drop a CHECK or FK, NOT NULL becomes nullable).
+	// Rebuilds with any other change still require [AllowRebuild]. Use this
+	// for "backwards-compatible only" policies: old readers and writers keep
+	// working through a loosening rebuild.
+	AllowLoosen AllowFlags = 1 << 2
+
+	// AllowDataDependent permits operations whose success depends on existing
+	// data: tightening a nullable column to NOT NULL, adding a FK or CHECK
+	// constraint to an existing table, adding a NOT NULL column without
+	// DEFAULT. These can succeed on an empty or known-clean database and
+	// fail elsewhere; sqlift rejects them by default to keep migrations
+	// deterministic across instances.
+	AllowDataDependent AllowFlags = 1 << 3
+
 	// AllowNone is the strictest policy: no rebuilds, no destructive ops.
 	AllowNone AllowFlags = 0
 
 	// AllowAll permits every currently-defined opt-in.
-	AllowAll AllowFlags = AllowRebuild | AllowDestructive
+	AllowAll AllowFlags = AllowRebuild | AllowDestructive | AllowLoosen | AllowDataDependent
 )
 
 // ApplyOptions controls the behavior of [Apply]. Zero value denies everything.

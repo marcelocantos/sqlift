@@ -53,9 +53,9 @@ heap-allocated string describing the failure. The caller must free it with
 | `SQLIFT_APPLY_ERROR` | SQL execution failed during `sqlift_apply()` (e.g. FK violation) |
 | `SQLIFT_DRIFT_ERROR` | Schema was modified outside sqlift since the last `sqlift_apply()` |
 | `SQLIFT_DESTRUCTIVE_ERROR` | Plan has destructive operations and `SQLIFT_ALLOW_DESTRUCTIVE` is not set in `opts.allow` |
-| `SQLIFT_BREAKING_CHANGE_ERROR` | Schema change depends on existing data (see [Breaking change detection](guide.md#breaking-change-detection)) |
+| `SQLIFT_BREAKING_CHANGE_ERROR` | Plan has a data-dependent change and `SQLIFT_ALLOW_DATA_DEPENDENT` is not set in `opts.allow` |
 | `SQLIFT_JSON_ERROR` | Invalid JSON or missing fields in plan JSON |
-| `SQLIFT_REBUILD_ERROR` | Plan requires a SQLite table rebuild and `SQLIFT_ALLOW_REBUILD` is not set in `opts.allow` |
+| `SQLIFT_REBUILD_ERROR` | Plan requires a SQLite table rebuild and neither `SQLIFT_ALLOW_REBUILD` nor (for pure-loosening rebuilds) `SQLIFT_ALLOW_LOOSEN` is set in `opts.allow` |
 
 ---
 
@@ -242,10 +242,13 @@ typedef struct sqlift_apply_options {
     unsigned int allow;  // bitmask of SQLIFT_ALLOW_*
 } sqlift_apply_options;
 
-#define SQLIFT_ALLOW_REBUILD     (1u << 0)
-#define SQLIFT_ALLOW_DESTRUCTIVE (1u << 1)
-#define SQLIFT_ALLOW_NONE        0u
-#define SQLIFT_ALLOW_ALL         (SQLIFT_ALLOW_REBUILD | SQLIFT_ALLOW_DESTRUCTIVE)
+#define SQLIFT_ALLOW_REBUILD        (1u << 0)
+#define SQLIFT_ALLOW_DESTRUCTIVE    (1u << 1)
+#define SQLIFT_ALLOW_LOOSEN         (1u << 2)
+#define SQLIFT_ALLOW_DATA_DEPENDENT (1u << 3)
+#define SQLIFT_ALLOW_NONE           0u
+#define SQLIFT_ALLOW_ALL            (SQLIFT_ALLOW_REBUILD | SQLIFT_ALLOW_DESTRUCTIVE \
+                                     | SQLIFT_ALLOW_LOOSEN | SQLIFT_ALLOW_DATA_DEPENDENT)
 
 int sqlift_apply(sqlift_db* db, const char* plan_json,
                  const sqlift_apply_options opts,
@@ -262,9 +265,18 @@ flags into `opts.allow`.
   deserialized).
 - `opts.allow` -- bitmask of `SQLIFT_ALLOW_*` flags. Zero (the default) only
   permits operations that are pure additions (CREATE TABLE/INDEX/VIEW/TRIGGER,
-  ALTER TABLE ADD COLUMN). To permit a SQLite table rebuild (12-step rewrite),
-  set `SQLIFT_ALLOW_REBUILD`. To permit dropping data, set
-  `SQLIFT_ALLOW_DESTRUCTIVE`. `SQLIFT_ALLOW_ALL` enables both.
+  ALTER TABLE ADD COLUMN). Available flags:
+  - `SQLIFT_ALLOW_REBUILD` -- SQLite's 12-step rebuild (column type change,
+    drop CHECK/FK, reordering).
+  - `SQLIFT_ALLOW_DESTRUCTIVE` -- drops (table, column, index, view, trigger).
+  - `SQLIFT_ALLOW_LOOSEN` -- rebuilds whose only changes are strict relaxations
+    (drop CHECK/FK, NOT NULL becomes nullable). Independent of
+    `SQLIFT_ALLOW_REBUILD`: a pure-loosening rebuild passes either gate.
+  - `SQLIFT_ALLOW_DATA_DEPENDENT` -- changes whose success depends on existing
+    data (nullable→NOT NULL, new FK or CHECK on an existing table, new NOT NULL
+    column without DEFAULT). Combine with `SQLIFT_ALLOW_REBUILD`: the data-
+    dependent change still requires the underlying rebuild.
+  - `SQLIFT_ALLOW_ALL` enables every currently-defined opt-in.
 - `err_type` -- receives the error code on failure.
 - `err_msg` -- receives a heap-allocated error message on failure.
 
@@ -272,9 +284,13 @@ flags into `opts.allow`.
 
 **Possible errors:**
 - `SQLIFT_REBUILD_ERROR` if the plan contains a `RebuildTable` operation and
-  `SQLIFT_ALLOW_REBUILD` is not set. Rebuilds are required for any change
-  beyond appending nullable / DEFAULTed columns -- e.g. column type changes,
-  dropping a CHECK or FK constraint, reordering columns.
+  neither `SQLIFT_ALLOW_REBUILD` nor (for pure-loosening rebuilds)
+  `SQLIFT_ALLOW_LOOSEN` is set.
+- `SQLIFT_BREAKING_CHANGE_ERROR` if the plan contains a data-dependent change
+  and `SQLIFT_ALLOW_DATA_DEPENDENT` is not set. The four data-dependent cases
+  are: nullable column tightening to NOT NULL, new FK constraint on an
+  existing table, new CHECK constraint on an existing table, and new NOT NULL
+  column without DEFAULT.
 - `SQLIFT_DESTRUCTIVE_ERROR` if the plan contains destructive operations and
   `SQLIFT_ALLOW_DESTRUCTIVE` is not set.
 - `SQLIFT_DRIFT_ERROR` if the database schema has been modified since the last
@@ -541,7 +557,9 @@ Returned by `sqlift_diff()`. Accepted by `sqlift_apply()`.
       "description": "Create table users",
       "sql": ["CREATE TABLE users (...)"],
       "destructive": false,
-      "requires_rebuild": false
+      "requires_rebuild": false,
+      "loosens_only": false,
+      "data_dependent": false
     }
   ],
   "warnings": [
@@ -566,6 +584,8 @@ Returned by `sqlift_diff()`. Accepted by `sqlift_apply()`.
 | `sql` | array | SQL statements to execute (in order) |
 | `destructive` | bool | Whether this operation drops data |
 | `requires_rebuild` | bool | Whether this operation requires SQLite's 12-step table rebuild (only `RebuildTable` ops set this) |
+| `loosens_only` | bool | Whether every change in this rebuild is a strict relaxation (drop CHECK/FK, NOT NULL→nullable). Only ever true on `RebuildTable` ops |
+| `data_dependent` | bool | Whether the operation's success depends on existing data (nullable→NOT NULL, new FK/CHECK on existing table, new NOT NULL column without DEFAULT) |
 
 **Operation types:** `CreateTable`, `DropTable`, `RebuildTable`, `AddColumn`,
 `CreateIndex`, `DropIndex`, `CreateView`, `DropView`, `CreateTrigger`,
