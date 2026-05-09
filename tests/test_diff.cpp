@@ -65,13 +65,13 @@ TEST_CASE("diff add NOT NULL column with default - simple append") {
     CHECK(plan["operations"][0]["type"] == "AddColumn");
 }
 
-TEST_CASE("diff add NOT NULL column without default - breaking change") {
+TEST_CASE("diff flags NOT NULL column without default as data-dependent") {
     auto current = parse_schema(
         "CREATE TABLE users (id INTEGER PRIMARY KEY);");
     auto desired = parse_schema(
         "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL);");
 
-    CHECK(diff_err(current, desired) == SQLIFT_BREAKING_CHANGE_ERROR);
+    CHECK(plan_has_data_dependent(diff_schemas(current, desired)));
 }
 
 TEST_CASE("diff remove column") {
@@ -97,13 +97,13 @@ TEST_CASE("diff change column type") {
     CHECK(plan["operations"][0]["type"] == "RebuildTable");
 }
 
-TEST_CASE("diff change column nullability - breaking change") {
+TEST_CASE("diff flags column nullability tightening as data-dependent") {
     auto current = parse_schema(
         "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);");
     auto desired = parse_schema(
         "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL);");
 
-    CHECK(diff_err(current, desired) == SQLIFT_BREAKING_CHANGE_ERROR);
+    CHECK(plan_has_data_dependent(diff_schemas(current, desired)));
 }
 
 TEST_CASE("diff add index") {
@@ -177,25 +177,25 @@ TEST_CASE("diff add trigger") {
     CHECK(plan["operations"][0]["type"] == "CreateTrigger");
 }
 
-TEST_CASE("diff rejects nullable to NOT NULL on existing column") {
+TEST_CASE("diff flags nullable to NOT NULL on existing column as data-dependent") {
     auto current = parse_schema(
         "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);");
     auto desired = parse_schema(
         "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL);");
 
-    CHECK(diff_err(current, desired) == SQLIFT_BREAKING_CHANGE_ERROR);
+    CHECK(plan_has_data_dependent(diff_schemas(current, desired)));
 }
 
-TEST_CASE("diff rejects nullable to NOT NULL even with DEFAULT") {
+TEST_CASE("diff flags nullable to NOT NULL with DEFAULT as data-dependent") {
     auto current = parse_schema(
         "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);");
     auto desired = parse_schema(
         "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL DEFAULT 'unknown');");
 
-    CHECK(diff_err(current, desired) == SQLIFT_BREAKING_CHANGE_ERROR);
+    CHECK(plan_has_data_dependent(diff_schemas(current, desired)));
 }
 
-TEST_CASE("diff rejects adding FK to existing table") {
+TEST_CASE("diff flags adding FK to existing table as data-dependent") {
     auto current = parse_schema(
         "CREATE TABLE users (id INTEGER PRIMARY KEY);"
         "CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER);");
@@ -203,16 +203,16 @@ TEST_CASE("diff rejects adding FK to existing table") {
         "CREATE TABLE users (id INTEGER PRIMARY KEY);"
         "CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER REFERENCES users(id));");
 
-    CHECK(diff_err(current, desired) == SQLIFT_BREAKING_CHANGE_ERROR);
+    CHECK(plan_has_data_dependent(diff_schemas(current, desired)));
 }
 
-TEST_CASE("diff rejects new NOT NULL column without DEFAULT") {
+TEST_CASE("diff flags new NOT NULL column without DEFAULT as data-dependent") {
     auto current = parse_schema(
         "CREATE TABLE users (id INTEGER PRIMARY KEY);");
     auto desired = parse_schema(
         "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL);");
 
-    CHECK(diff_err(current, desired) == SQLIFT_BREAKING_CHANGE_ERROR);
+    CHECK(plan_has_data_dependent(diff_schemas(current, desired)));
 }
 
 TEST_CASE("diff allows new NOT NULL column with DEFAULT via AddColumn") {
@@ -253,13 +253,13 @@ TEST_CASE("diff destructive guard") {
     CHECK(has_destructive);
 }
 
-TEST_CASE("diff rejects adding CHECK constraint to existing table") {
+TEST_CASE("diff flags adding CHECK constraint to existing table as data-dependent") {
     auto current = parse_schema(
         "CREATE TABLE items (id INTEGER PRIMARY KEY, price REAL);");
     auto desired = parse_schema(
         "CREATE TABLE items (id INTEGER PRIMARY KEY, price REAL, CHECK (price > 0));");
 
-    CHECK(diff_err(current, desired) == SQLIFT_BREAKING_CHANGE_ERROR);
+    CHECK(plan_has_data_dependent(diff_schemas(current, desired)));
 }
 
 TEST_CASE("diff COLLATE change triggers rebuild") {

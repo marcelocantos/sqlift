@@ -128,6 +128,10 @@ TEST_CASE("roundtrip: v1 to v2 to v3 breaking change rejected") {
     // v2
     apply_plan(db.db, diff_schemas(extract_schema(db.db), parse_schema(v2)));
 
-    // v3 makes email NOT NULL — this is a breaking change and must be rejected
-    CHECK(diff_err(extract_schema(db.db), parse_schema(v3)) == SQLIFT_BREAKING_CHANGE_ERROR);
+    // v3 makes email NOT NULL -- a data-dependent change. The diff
+    // produces a plan, but apply rejects it without ALLOW_DATA_DEPENDENT.
+    auto plan_str = diff_schemas(extract_schema(db.db), parse_schema(v3));
+    CHECK(plan_has_data_dependent(plan_str));
+    CHECK(apply_err(db.db, plan_str, SQLIFT_ALLOW_REBUILD)
+          == SQLIFT_BREAKING_CHANGE_ERROR);
 }

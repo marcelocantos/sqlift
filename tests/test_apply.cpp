@@ -135,6 +135,126 @@ TEST_CASE("apply rejects destructive even with allow_rebuild") {
     CHECK(apply_err(db.db, plan_str, SQLIFT_ALLOW_REBUILD) == SQLIFT_DESTRUCTIVE_ERROR);
 }
 
+TEST_CASE("apply rejects data-dependent change without flag") {
+    TestDB db;
+    db.exec("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);");
+
+    // Tightening nullable -> NOT NULL is data-dependent.
+    auto desired = parse_schema(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL);");
+    auto plan_str = diff_schemas(extract_schema(db.db), desired);
+
+    CHECK(plan_has_data_dependent(plan_str));
+    // allow_rebuild alone is not enough.
+    CHECK(apply_err(db.db, plan_str, SQLIFT_ALLOW_REBUILD)
+          == SQLIFT_BREAKING_CHANGE_ERROR);
+}
+
+TEST_CASE("apply data-dependent change on empty table with flag succeeds") {
+    TestDB db;
+    db.exec("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);");
+    // Empty table -- the tightening will succeed.
+
+    auto desired = parse_schema(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL);");
+    auto plan_str = diff_schemas(extract_schema(db.db), desired);
+
+    apply_plan(db.db, plan_str,
+               SQLIFT_ALLOW_REBUILD | SQLIFT_ALLOW_DATA_DEPENDENT);
+
+    auto after = json::parse(extract_schema(db.db));
+    bool name_notnull = false;
+    for (const auto& col : after["tables"]["users"]["columns"]) {
+        if (col["name"] == "name" && col.value("notnull", false))
+            name_notnull = true;
+    }
+    CHECK(name_notnull);
+}
+
+TEST_CASE("apply data-dependent change on populated table fails at SQLite level") {
+    TestDB db;
+    db.exec("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);");
+    // Insert a row with NULL name -- will violate NOT NULL during rebuild.
+    db.exec("INSERT INTO users (id, name) VALUES (1, NULL);");
+
+    auto desired = parse_schema(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL);");
+    auto plan_str = diff_schemas(extract_schema(db.db), desired);
+
+    // With both flags set, the policy gate passes -- but SQLite rejects
+    // the rebuild because existing data violates the new constraint. The
+    // failure is whatever SQLite's exec path emits, not the policy
+    // BreakingChangeError.
+    int err = apply_err(db.db, plan_str,
+                        SQLIFT_ALLOW_REBUILD | SQLIFT_ALLOW_DATA_DEPENDENT);
+    CHECK(err != SQLIFT_OK);
+    CHECK(err != SQLIFT_BREAKING_CHANGE_ERROR);
+}
+
+TEST_CASE("apply pure-loosen rebuild with allow_loosen succeeds") {
+    TestDB db;
+    db.exec(
+        "CREATE TABLE items (id INTEGER PRIMARY KEY, price REAL,"
+        " CHECK (price > 0));");
+    db.exec("INSERT INTO items (id, price) VALUES (1, 9.99);");
+
+    // Drop the CHECK constraint -- pure loosening.
+    auto desired = parse_schema(
+        "CREATE TABLE items (id INTEGER PRIMARY KEY, price REAL);");
+    auto plan_str = diff_schemas(extract_schema(db.db), desired);
+
+    CHECK(plan_has_loosens_only(plan_str));
+    // allow_loosen alone is enough -- no allow_rebuild needed.
+    apply_plan(db.db, plan_str, SQLIFT_ALLOW_LOOSEN);
+
+    int64_t cnt = 0;
+    sqlift_db_query_int64(db.db, "SELECT COUNT(*) FROM items", &cnt, nullptr);
+    CHECK(cnt == 1);
+}
+
+TEST_CASE("apply pure-loosen rebuild rejected without any flag") {
+    TestDB db;
+    db.exec(
+        "CREATE TABLE items (id INTEGER PRIMARY KEY, price REAL,"
+        " CHECK (price > 0));");
+
+    auto desired = parse_schema(
+        "CREATE TABLE items (id INTEGER PRIMARY KEY, price REAL);");
+    auto plan_str = diff_schemas(extract_schema(db.db), desired);
+
+    // Strict default -- rebuild gate fires even though it would loosen.
+    CHECK(apply_err(db.db, plan_str, SQLIFT_ALLOW_NONE) == SQLIFT_REBUILD_ERROR);
+}
+
+TEST_CASE("apply mixed rebuild rejected by allow_loosen alone") {
+    TestDB db;
+    db.exec("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);");
+
+    // Column type change -- not pure loosening.
+    auto desired = parse_schema(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name BLOB);");
+    auto plan_str = diff_schemas(extract_schema(db.db), desired);
+
+    CHECK(!plan_has_loosens_only(plan_str));
+    CHECK(apply_err(db.db, plan_str, SQLIFT_ALLOW_LOOSEN)
+          == SQLIFT_REBUILD_ERROR);
+    // But allow_rebuild covers it.
+    apply_plan(db.db, plan_str, SQLIFT_ALLOW_REBUILD);
+}
+
+TEST_CASE("apply NOT NULL relaxation flagged as pure loosening") {
+    TestDB db;
+    db.exec("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL);");
+
+    // Relax NOT NULL -- pure loosening.
+    auto desired = parse_schema(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);");
+    auto plan_str = diff_schemas(extract_schema(db.db), desired);
+
+    CHECK(plan_has_loosens_only(plan_str));
+    apply_plan(db.db, plan_str, SQLIFT_ALLOW_LOOSEN);
+}
+
 TEST_CASE("apply updates state hash") {
     TestDB db;
     auto desired = parse_schema("CREATE TABLE users (id INTEGER PRIMARY KEY);");

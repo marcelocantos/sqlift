@@ -68,11 +68,14 @@ func ParseOpType(s string) (OpType, error) {
 
 // jsonOperation is the wire representation of an [Operation].
 type jsonOperation struct {
-	Type        string   `json:"type"`
-	ObjectName  string   `json:"object_name"`
-	Description string   `json:"description"`
-	SQL         []string `json:"sql"`
-	Destructive bool     `json:"destructive"`
+	Type            string   `json:"type"`
+	ObjectName      string   `json:"object_name"`
+	Description     string   `json:"description"`
+	SQL             []string `json:"sql"`
+	Destructive     bool     `json:"destructive"`
+	RequiresRebuild bool     `json:"requires_rebuild"`
+	LoosensOnly     bool     `json:"loosens_only"`
+	DataDependent   bool     `json:"data_dependent"`
 }
 
 // jsonWarning is the wire representation of a [Warning].
@@ -105,11 +108,14 @@ func ToJSON(plan MigrationPlan) ([]byte, error) {
 			sql = []string{}
 		}
 		jp.Operations = append(jp.Operations, jsonOperation{
-			Type:        op.Type.String(),
-			ObjectName:  op.ObjectName,
-			Description: op.Description,
-			SQL:         sql,
-			Destructive: op.Destructive,
+			Type:            op.Type.String(),
+			ObjectName:      op.ObjectName,
+			Description:     op.Description,
+			SQL:             sql,
+			Destructive:     op.Destructive,
+			RequiresRebuild: op.RequiresRebuild,
+			LoosensOnly:     op.LoosensOnly,
+			DataDependent:   op.DataDependent,
 		})
 	}
 	for _, w := range plan.Warnings() {
@@ -235,6 +241,29 @@ func FromJSON(data []byte) (MigrationPlan, error) {
 			return MigrationPlan{}, &JSONError{Msg: "Operation missing 'destructive' boolean field"}
 		}
 
+		// requires_rebuild, loosens_only, data_dependent are optional for
+		// forward-compat with older plan JSON. Defaults match the C++ side:
+		// requires_rebuild defaults to true for RebuildTable ops, false
+		// otherwise; loosens_only and data_dependent default to false.
+		requiresRebuild := opType == RebuildTable
+		if rrRaw, ok := opMap["requires_rebuild"]; ok {
+			if err := json.Unmarshal(rrRaw, &requiresRebuild); err != nil {
+				return MigrationPlan{}, &JSONError{Msg: "Operation 'requires_rebuild' must be boolean"}
+			}
+		}
+		var loosensOnly bool
+		if loRaw, ok := opMap["loosens_only"]; ok {
+			if err := json.Unmarshal(loRaw, &loosensOnly); err != nil {
+				return MigrationPlan{}, &JSONError{Msg: "Operation 'loosens_only' must be boolean"}
+			}
+		}
+		var dataDependent bool
+		if ddRaw, ok := opMap["data_dependent"]; ok {
+			if err := json.Unmarshal(ddRaw, &dataDependent); err != nil {
+				return MigrationPlan{}, &JSONError{Msg: "Operation 'data_dependent' must be boolean"}
+			}
+		}
+
 		// Validate that the first SQL statement starts with the expected prefix.
 		if len(sqlStmts) > 0 {
 			prefix := sqlPrefixForOpType(opType)
@@ -248,11 +277,14 @@ func FromJSON(data []byte) (MigrationPlan, error) {
 		}
 
 		ops = append(ops, Operation{
-			Type:        opType,
-			ObjectName:  objectName,
-			Description: description,
-			SQL:         sqlStmts,
-			Destructive: destructive,
+			Type:            opType,
+			ObjectName:      objectName,
+			Description:     description,
+			SQL:             sqlStmts,
+			Destructive:     destructive,
+			RequiresRebuild: requiresRebuild,
+			LoosensOnly:     loosensOnly,
+			DataDependent:   dataDependent,
 		})
 	}
 

@@ -170,13 +170,15 @@ func TestRoundtrip(t *testing.T) {
 		plan2 := mustDiff(t, current2, desired2)
 		mustApply(t, db, plan2)
 
-		// Diff to v3 should fail with BreakingChangeError.
+		// Diff to v3 produces a plan with a data-dependent rebuild;
+		// Apply rejects it without AllowDataDependent.
 		desired3 := mustParse(t, v3)
 		current3 := mustExtract(t, db)
-		_, err := Diff(current3, desired3)
-		if err == nil {
-			t.Fatal("expected BreakingChangeError, got nil")
+		plan3 := mustDiff(t, current3, desired3)
+		if !hasDataDependent(plan3) {
+			t.Fatal("expected data-dependent op in plan")
 		}
+		err := Apply(db, plan3, ApplyOptions{Allow: AllowRebuild})
 		var bce *BreakingChangeError
 		if !errors.As(err, &bce) {
 			t.Errorf("expected *BreakingChangeError, got %T: %v", err, err)

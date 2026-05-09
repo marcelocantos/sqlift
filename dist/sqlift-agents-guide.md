@@ -68,10 +68,13 @@ enum sqlift_error_type {
 };
 
 // Permission flags for sqlift_apply_options.allow
-#define SQLIFT_ALLOW_REBUILD     (1u << 0)
-#define SQLIFT_ALLOW_DESTRUCTIVE (1u << 1)
-#define SQLIFT_ALLOW_NONE        0u
-#define SQLIFT_ALLOW_ALL         (SQLIFT_ALLOW_REBUILD | SQLIFT_ALLOW_DESTRUCTIVE)
+#define SQLIFT_ALLOW_REBUILD        (1u << 0)
+#define SQLIFT_ALLOW_DESTRUCTIVE    (1u << 1)
+#define SQLIFT_ALLOW_LOOSEN         (1u << 2)
+#define SQLIFT_ALLOW_DATA_DEPENDENT (1u << 3)
+#define SQLIFT_ALLOW_NONE           0u
+#define SQLIFT_ALLOW_ALL            (SQLIFT_ALLOW_REBUILD | SQLIFT_ALLOW_DESTRUCTIVE \
+                                     | SQLIFT_ALLOW_LOOSEN | SQLIFT_ALLOW_DATA_DEPENDENT)
 ```
 
 #### Functions
@@ -168,9 +171,9 @@ Operation type strings: `CreateTable`, `DropTable`, `RebuildTable`,
 
 - **AddColumn fast path**: When the only change is appending nullable columns (or NOT NULL with DEFAULT) at the end, uses `ALTER TABLE ADD COLUMN`.
 - **12-step table rebuild**: Any other table change uses SQLite's recommended rebuild (disable FKs, savepoint, create new, copy data, drop old, rename, recreate indexes/triggers/views, FK check, release, re-enable FKs).
-- **Strict-by-default policy**: `sqlift_apply()` denies anything beyond pure additions unless flags are set in `opts.allow`. `SQLIFT_ALLOW_REBUILD` permits SQLite's 12-step rebuild (column type change, dropping a CHECK/FK, reordering); `SQLIFT_ALLOW_DESTRUCTIVE` permits drops. Returns `SQLIFT_REBUILD_ERROR` or `SQLIFT_DESTRUCTIVE_ERROR` respectively when blocked.
+- **Strict-by-default policy**: `sqlift_apply()` denies anything beyond pure additions unless flags are set in `opts.allow`. `SQLIFT_ALLOW_REBUILD` permits SQLite's 12-step rebuild; `SQLIFT_ALLOW_LOOSEN` permits rebuilds whose changes are pure constraint relaxations (drop CHECK/FK, NOT NULL→nullable); `SQLIFT_ALLOW_DESTRUCTIVE` permits drops; `SQLIFT_ALLOW_DATA_DEPENDENT` permits changes whose success depends on existing data (nullable→NOT NULL, new FK/CHECK, new NOT NULL column without DEFAULT). Returns `SQLIFT_REBUILD_ERROR`, `SQLIFT_BREAKING_CHANGE_ERROR`, or `SQLIFT_DESTRUCTIVE_ERROR` respectively when blocked.
 - **Drift detection**: Stores SHA-256 hash in `_sqlift_state` table after each apply. Returns `SQLIFT_DRIFT_ERROR` if schema changed outside sqlift.
-- **Breaking change detection**: `sqlift_diff()` returns `SQLIFT_BREAKING_CHANGE_ERROR` for schema changes whose success depends on existing data. Detected cases: (1) existing nullable column becomes NOT NULL, (2) new FK constraint added to existing table, (3) new CHECK constraint added to existing table, (4) new NOT NULL column without DEFAULT.
+- **Data-dependent change detection**: `sqlift_diff()` tags rebuild ops with `data_dependent: true` for schema changes whose success depends on existing data. `sqlift_apply()` rejects them with `SQLIFT_BREAKING_CHANGE_ERROR` unless `SQLIFT_ALLOW_DATA_DEPENDENT` is set. Detected cases: (1) existing nullable column becomes NOT NULL, (2) new FK constraint added to existing table, (3) new CHECK constraint added to existing table, (4) new NOT NULL column without DEFAULT.
 - **No rename detection**: A removed + added column is always a drop + add.
 - **Operation order**: Drop triggers/views/indexes, then table ops, then create indexes/views/triggers.
 
@@ -220,7 +223,7 @@ if !plan.Empty() {
 | `Open` | `func Open(path string) (*Database, error)` | Open a SQLite database. |
 | `Parse` | `func Parse(ddl string) (Schema, error)` | Parse DDL into Schema. Returns `*ParseError`. |
 | `Extract` | `func Extract(db *Database) (Schema, error)` | Read schema from live DB. |
-| `Diff` | `func Diff(current, desired Schema) (MigrationPlan, error)` | Pure diff. Returns `*BreakingChangeError` on unsafe changes. Populates warnings for redundant indexes. |
+| `Diff` | `func Diff(current, desired Schema) (MigrationPlan, error)` | Pure diff. Tags ops with `DataDependent: true` for unsafe changes (caller checks at apply time). Populates warnings for redundant indexes. |
 | `DetectRedundantIndexes` | `func DetectRedundantIndexes(schema Schema) []Warning` | Detect prefix-duplicate and PK-duplicate indexes. |
 | `Apply` | `func Apply(db *Database, plan MigrationPlan, opts ApplyOptions) error` | Execute plan. `opts.Allow` is a bitmask (`AllowRebuild`, `AllowDestructive`, `AllowAll`); zero is strictest. Returns `*RebuildError`, `*DestructiveError`, `*DriftError`, or `*ApplyError`. |
 | `ToJSON` | `func ToJSON(plan MigrationPlan) ([]byte, error)` | Serialize plan to JSON bytes. |
@@ -249,7 +252,7 @@ All implement `error` with a `Msg string` field. Use `errors.As` for type assert
 | `*ParseError` | Invalid SQL in `Parse()` |
 | `*ExtractError` | Schema extraction fails |
 | `*DiffError` | Internal diff error |
-| `*BreakingChangeError` | Schema change is backwards-incompatible |
+| `*BreakingChangeError` | Plan has data-dependent change, `AllowDataDependent` not set in `opts.Allow` |
 | `*ApplyError` | SQL fails during `Apply()` |
 | `*RebuildError` | Plan requires SQLite rebuild, `AllowRebuild` not set in `opts.Allow` |
 | `*DestructiveError` | Plan has destructive ops, `AllowDestructive` not set in `opts.Allow` |
