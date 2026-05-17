@@ -159,12 +159,30 @@ func (tr Trigger) Equal(o Trigger) bool {
 	return tr.Name == o.Name && tr.TableName == o.TableName && tr.SQL == o.SQL
 }
 
+// VirtualTable represents a CREATE VIRTUAL TABLE <name> USING <module>(<args>)
+// declaration. Diff treats any change as drop+recreate (destructive); there is
+// no in-place modification for virtual tables. RawSQL holds the original
+// statement and is excluded from Equal so whitespace-only differences don't
+// trigger spurious recreates.
+type VirtualTable struct {
+	Name   string `json:"name"`
+	Module string `json:"module"`
+	Args   string `json:"args"`
+	RawSQL string `json:"raw_sql"`
+}
+
+// Equal compares structural fields only, excluding RawSQL.
+func (vt VirtualTable) Equal(o VirtualTable) bool {
+	return vt.Name == o.Name && vt.Module == o.Module && vt.Args == o.Args
+}
+
 // Schema represents the complete schema of a database.
 type Schema struct {
-	Tables   map[string]Table   `json:"tables"`
-	Indexes  map[string]Index   `json:"indexes"`
-	Views    map[string]View    `json:"views"`
-	Triggers map[string]Trigger `json:"triggers"`
+	Tables        map[string]Table        `json:"tables"`
+	Indexes       map[string]Index        `json:"indexes"`
+	Views         map[string]View         `json:"views"`
+	Triggers      map[string]Trigger      `json:"triggers"`
+	VirtualTables map[string]VirtualTable `json:"virtual_tables,omitempty"`
 }
 
 // Equal returns true if all schema objects are structurally equal.
@@ -202,6 +220,15 @@ func (s Schema) Equal(o Schema) bool {
 	for name, tr := range s.Triggers {
 		otr, ok := o.Triggers[name]
 		if !ok || !tr.Equal(otr) {
+			return false
+		}
+	}
+	if len(s.VirtualTables) != len(o.VirtualTables) {
+		return false
+	}
+	for name, vt := range s.VirtualTables {
+		ovt, ok := o.VirtualTables[name]
+		if !ok || !vt.Equal(ovt) {
 			return false
 		}
 	}
@@ -327,6 +354,23 @@ func (s Schema) Hash() string {
 		b.WriteByte(' ')
 		b.WriteString(trig.SQL)
 		b.WriteByte('\n')
+	}
+
+	// Virtual tables, conditional on non-empty so schemas without virtual
+	// tables produce the same hash they did before this field existed.
+	// Format MUST match dist/sqlift.cpp Schema::hash() byte-for-byte for
+	// cross-language drift detection.
+	if len(s.VirtualTables) > 0 {
+		for _, name := range sortedKeys(s.VirtualTables) {
+			vt := s.VirtualTables[name]
+			b.WriteString("VTABLE ")
+			b.WriteString(name)
+			b.WriteString(" USING ")
+			b.WriteString(vt.Module)
+			b.WriteByte('(')
+			b.WriteString(vt.Args)
+			b.WriteString(")\n")
+		}
 	}
 
 	sum := sha256.Sum256([]byte(b.String()))
