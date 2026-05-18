@@ -53,8 +53,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-      - name: Build static library
-        run: mk lib
+      - name: Verify bundled sources are in sync with dist/
+        run: |
+          mk bundle
+          if ! git diff --quiet; then
+            echo "::error::go/sqlift/ bundled sources are out of sync with dist/. Run 'mk bundle' and commit."
+            git --no-pager diff --stat
+            exit 1
+          fi
 
       - name: Set up Go
         uses: actions/setup-go@v5

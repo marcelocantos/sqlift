@@ -55,7 +55,25 @@ tests/            # doctest suites (7 files, 125 tests) using C API with JSON
   test_helpers.h  # Test utilities (RAII wrappers, JSON convenience functions)
 docs/guide.md     # Concepts and workflows
 docs/reference.md # Complete API reference
+go/sqlift/        # Go module — cgo wrapper
+  sqlift.cpp      # Copy of dist/sqlift.cpp (kept in sync by `mk bundle`)
+  sqlift.h        # Copy of dist/sqlift.h (kept in sync by `mk bundle`)
+  include/nlohmann/json.hpp # Copy of vendored nlohmann/json (kept in sync by `mk bundle`)
 ```
+
+## Go module bundling
+
+The Go module at `go/sqlift/` bundles its own copies of `sqlift.cpp`,
+`sqlift.h`, and the vendored `nlohmann/json.hpp`. This is intentional:
+cgo compiles `sqlift.cpp` directly as part of the package build, so
+downstream Go consumers can `go get` and build without any separate
+`mk lib` step.
+
+**dist/ is the source of truth.** When you edit `dist/sqlift.cpp`,
+`dist/sqlift.h`, or `vendor/include/nlohmann/json.hpp`, run `mk bundle`
+to refresh the copies under `go/sqlift/`, then commit the result. CI
+asserts the copies are in sync (the test-go job runs `mk bundle` and
+fails if `git diff` reports any change).
 
 ## TODOs
 
