@@ -5,12 +5,25 @@
 // and dist/sqlift.h; `mk bundle` keeps them in sync. The single-header
 // nlohmann/json dependency is bundled under include/nlohmann/ so consumers
 // can `go get` and build with cgo and no extra setup.
+//
+// Note: sqlift does NOT add `-lsqlite3` to LDFLAGS. The bundled sqlift.cpp
+// uses sqlite3 symbols, but where those symbols come from is the consumer's
+// choice. Common arrangements:
+//   - import _ "github.com/mattn/go-sqlite3" — mattn bundles sqlite3.c
+//     statically; sqlift's symbols resolve against mattn's copy.
+//   - System sqlite3: set CGO_LDFLAGS=-lsqlite3 (works on Linux/macOS).
+//   - Bundled amalgamation: link your own sqlite3.c via your package's cgo.
+//
+// Hardcoding -lsqlite3 here breaks cross-compile to targets without a
+// matching libsqlite3 (e.g. windows/arm64 with llvm-mingw), and it
+// duplicates the linker work for consumers who already bring sqlite3
+// statically.
 
 package sqlift
 
 //#cgo CFLAGS:   -I${SRCDIR}
 //#cgo CXXFLAGS: -std=c++23 -I${SRCDIR} -I${SRCDIR}/include
-//#cgo LDFLAGS:  -lsqlite3 -lstdc++
+//#cgo LDFLAGS:  -lstdc++
 //#include "sqlift.h"
 //#include <stdlib.h>
 import "C"
