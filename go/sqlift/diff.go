@@ -15,16 +15,18 @@ import (
 type OpType int
 
 const (
-	CreateTable  OpType = iota // Create a new table.
-	DropTable                  // Drop an existing table.
-	RebuildTable               // Rebuild (recreate) a table.
-	AddColumn                  // Add a column via ALTER TABLE.
-	CreateIndex                // Create a new index.
-	DropIndex                  // Drop an existing index.
-	CreateView                 // Create a new view.
-	DropView                   // Drop an existing view.
-	CreateTrigger              // Create a new trigger.
-	DropTrigger                // Drop an existing trigger.
+	CreateTable        OpType = iota // Create a new table.
+	DropTable                        // Drop an existing table.
+	RebuildTable                     // Rebuild (recreate) a table.
+	AddColumn                        // Add a column via ALTER TABLE.
+	CreateIndex                      // Create a new index.
+	DropIndex                        // Drop an existing index.
+	CreateView                       // Create a new view.
+	DropView                         // Drop an existing view.
+	CreateTrigger                    // Create a new trigger.
+	DropTrigger                      // Drop an existing trigger.
+	CreateVirtualTable               // Create a CREATE VIRTUAL TABLE.
+	DropVirtualTable                 // Drop a virtual table (also drops its shadow tables).
 )
 
 // Operation describes a single migration step.

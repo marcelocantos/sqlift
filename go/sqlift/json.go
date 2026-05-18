@@ -32,6 +32,10 @@ func (t OpType) String() string {
 		return "CreateTrigger"
 	case DropTrigger:
 		return "DropTrigger"
+	case CreateVirtualTable:
+		return "CreateVirtualTable"
+	case DropVirtualTable:
+		return "DropVirtualTable"
 	default:
 		return fmt.Sprintf("OpType(%d)", int(t))
 	}
@@ -61,6 +65,10 @@ func ParseOpType(s string) (OpType, error) {
 		return CreateTrigger, nil
 	case "DropTrigger":
 		return DropTrigger, nil
+	case "CreateVirtualTable":
+		return CreateVirtualTable, nil
+	case "DropVirtualTable":
+		return DropVirtualTable, nil
 	default:
 		return 0, &JSONError{Msg: "Unknown OpType string: " + s}
 	}
@@ -336,6 +344,10 @@ func sqlPrefixForOpType(t OpType) string {
 		return "CREATE TRIGGER"
 	case DropTrigger:
 		return "DROP TRIGGER"
+	case CreateVirtualTable:
+		return "CREATE VIRTUAL TABLE"
+	case DropVirtualTable:
+		return "DROP TABLE"
 	default:
 		return ""
 	}
