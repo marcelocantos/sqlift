@@ -57,5 +57,27 @@ $san_bin: $san_obj build/sanitize/libsqlift.a
 !uninstall:
     rm -f $prefix/include/sqlift.h $prefix/lib/libsqlift.a
 
+go_bundled = go/sqlift/sqlift.cpp go/sqlift/sqlift.h go/sqlift/include/nlohmann/json.hpp go/sqlift/include/nlohmann/LICENSE
+
+go/sqlift/sqlift.cpp: dist/sqlift.cpp
+    cp $input $target
+
+go/sqlift/sqlift.h: dist/sqlift.h
+    cp $input $target
+
+go/sqlift/include/nlohmann/json.hpp: vendor/include/nlohmann/json.hpp
+    mkdir -p $[dir $target]
+    cp $input $target
+
+go/sqlift/include/nlohmann/LICENSE: vendor/include/nlohmann/LICENSE
+    mkdir -p $[dir $target]
+    cp $input $target
+
+# Keep the Go-module-bundled sources in sync with dist/ and vendor/. Run
+# this after any edit to dist/sqlift.cpp, dist/sqlift.h, or the vendored
+# nlohmann header. The Go module ships the bundled copies so downstream
+# cgo consumers can `go get` without a separate libsqlift.a build step.
+!bundle: $go_bundled
+
 !clean:
     rm -rf build/ .mk/

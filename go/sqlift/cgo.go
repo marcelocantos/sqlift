@@ -1,10 +1,16 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
+// The bundled sqlift.cpp and sqlift.h here are copies of dist/sqlift.cpp
+// and dist/sqlift.h; `mk bundle` keeps them in sync. The single-header
+// nlohmann/json dependency is bundled under include/nlohmann/ so consumers
+// can `go get` and build with cgo and no extra setup.
+
 package sqlift
 
-//#cgo CFLAGS: -I${SRCDIR}/../../dist
-//#cgo LDFLAGS: ${SRCDIR}/../../build/libsqlift.a -lsqlite3 -lstdc++
+//#cgo CFLAGS:   -I${SRCDIR}
+//#cgo CXXFLAGS: -std=c++23 -I${SRCDIR} -I${SRCDIR}/include
+//#cgo LDFLAGS:  -lsqlite3 -lstdc++
 //#include "sqlift.h"
 //#include <stdlib.h>
 import "C"
