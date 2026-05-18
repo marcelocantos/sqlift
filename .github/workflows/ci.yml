@@ -68,9 +68,16 @@ jobs:
           go-version-file: go/sqlift/go.mod
 
       - name: Test
+        # sqlift's cgo no longer hardcodes -lsqlite3 (downstream consumers
+        # like mnemo bring sqlite3 via mattn). sqlift's own tests have no
+        # such provider, so the test job adds the link flag explicitly.
         working-directory: go/sqlift
+        env:
+          CGO_LDFLAGS: -lsqlite3
         run: go test -v -count=1 ./...
 
       - name: Vet
         working-directory: go/sqlift
+        env:
+          CGO_LDFLAGS: -lsqlite3
         run: go vet ./...
