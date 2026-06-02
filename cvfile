@@ -80,4 +80,4 @@ go/sqlift/include/nlohmann/LICENSE: vendor/include/nlohmann/LICENSE
 !bundle: $go_bundled
 
 !clean:
-    rm -rf build/ .mk/
+    rm -rf build/ .cv/

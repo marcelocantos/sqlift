@@ -101,12 +101,12 @@ condensed API reference covering both C and Go.
 
 ```sh
 mk            # build library
-mk test       # build and run tests
-mk lib        # build static library only
-mk clean      # remove build artifacts
+cv test       # build and run tests
+cv lib        # build static library only
+cv clean      # remove build artifacts
 ```
 
-Requires [mk](https://github.com/marcelocantos/mk) build tool and
+Requires [cv](https://github.com/marcelocantos/cv) build tool and
 [doctest](https://github.com/doctest/doctest) (vendored).
 
 ### Go

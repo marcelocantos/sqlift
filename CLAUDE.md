@@ -6,12 +6,12 @@ Declarative SQLite schema migration library. Two files in `dist/`: `sqlift.h` (C
 
 ```sh
 mk            # build library
-mk test       # build and run tests
-mk lib        # build static library only
-mk clean      # remove build artifacts
+cv test       # build and run tests
+cv lib        # build static library only
+cv clean      # remove build artifacts
 ```
 
-Uses [mk](https://github.com/marcelocantos/mk) as the build tool (`mkfile`). Requires C++23 and system SQLite3. doctest and nlohmann/json are vendored in `vendor/include/`.
+Uses [cv](https://github.com/marcelocantos/cv) as the build tool (`cvfile`). Requires C++23 and system SQLite3. doctest and nlohmann/json are vendored in `vendor/include/`.
 
 ## Architecture
 
@@ -50,15 +50,15 @@ dist/
   sqlift.h        # C-only public header (error codes, opaque handle, function declarations)
   sqlift.cpp      # All implementation (C++ types, logic, C wrapper)
   sqlift-agents-guide.md # Quick-start guide for AI coding agents
-mkfile            # mk build file
+cvfile            # cv build file
 tests/            # doctest suites (7 files, 125 tests) using C API with JSON
   test_helpers.h  # Test utilities (RAII wrappers, JSON convenience functions)
 docs/guide.md     # Concepts and workflows
 docs/reference.md # Complete API reference
 go/sqlift/        # Go module — cgo wrapper
-  sqlift.cpp      # Copy of dist/sqlift.cpp (kept in sync by `mk bundle`)
-  sqlift.h        # Copy of dist/sqlift.h (kept in sync by `mk bundle`)
-  include/nlohmann/json.hpp # Copy of vendored nlohmann/json (kept in sync by `mk bundle`)
+  sqlift.cpp      # Copy of dist/sqlift.cpp (kept in sync by `cv bundle`)
+  sqlift.h        # Copy of dist/sqlift.h (kept in sync by `cv bundle`)
+  include/nlohmann/json.hpp # Copy of vendored nlohmann/json (kept in sync by `cv bundle`)
 ```
 
 ## Go module bundling
@@ -67,12 +67,12 @@ The Go module at `go/sqlift/` bundles its own copies of `sqlift.cpp`,
 `sqlift.h`, and the vendored `nlohmann/json.hpp`. This is intentional:
 cgo compiles `sqlift.cpp` directly as part of the package build, so
 downstream Go consumers can `go get` and build without any separate
-`mk lib` step.
+`cv lib` step.
 
 **dist/ is the source of truth.** When you edit `dist/sqlift.cpp`,
-`dist/sqlift.h`, or `vendor/include/nlohmann/json.hpp`, run `mk bundle`
+`dist/sqlift.h`, or `vendor/include/nlohmann/json.hpp`, run `cv bundle`
 to refresh the copies under `go/sqlift/`, then commit the result. CI
-asserts the copies are in sync (the test-go job runs `mk bundle` and
+asserts the copies are in sync (the test-go job runs `cv bundle` and
 fails if `git diff` reports any change).
 
 ## TODOs
