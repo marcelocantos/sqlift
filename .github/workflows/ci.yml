@@ -17,21 +17,21 @@ jobs:
 
       - name: Install mk
         run: |
-          MK_VERSION=$(gh release view --repo marcelocantos/mk --json tagName -q .tagName)
+          CV_VERSION=$(gh release view --repo marcelocantos/cv --json tagName -q .tagName)
           if [ "$RUNNER_OS" = "macOS" ]; then
             ARCH="darwin-arm64"
           else
             ARCH="linux-amd64"
           fi
-          curl -sL "https://github.com/marcelocantos/mk/releases/download/${MK_VERSION}/mk-${MK_VERSION#v}-${ARCH}.tar.gz" | sudo tar xz -C /usr/local/bin mk
+          curl -sL "https://github.com/marcelocantos/cv/releases/download/${CV_VERSION}/cv-${CV_VERSION#v}-${ARCH}.tar.gz" | sudo tar xz -C /usr/local/bin cv
         env:
           GH_TOKEN: ${{ github.token }}
 
       - name: Build and test
-        run: mk test
+        run: cv test
 
       - name: Sanitizer test
-        run: mk sanitize
+        run: cv sanitize
 
   test-go:
     strategy:
@@ -43,13 +43,13 @@ jobs:
 
       - name: Install mk
         run: |
-          MK_VERSION=$(gh release view --repo marcelocantos/mk --json tagName -q .tagName)
+          CV_VERSION=$(gh release view --repo marcelocantos/cv --json tagName -q .tagName)
           if [ "$RUNNER_OS" = "macOS" ]; then
             ARCH="darwin-arm64"
           else
             ARCH="linux-amd64"
           fi
-          curl -sL "https://github.com/marcelocantos/mk/releases/download/${MK_VERSION}/mk-${MK_VERSION#v}-${ARCH}.tar.gz" | sudo tar xz -C /usr/local/bin mk
+          curl -sL "https://github.com/marcelocantos/cv/releases/download/${CV_VERSION}/cv-${CV_VERSION#v}-${ARCH}.tar.gz" | sudo tar xz -C /usr/local/bin cv
         env:
           GH_TOKEN: ${{ github.token }}
 
