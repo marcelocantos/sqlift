@@ -1,4 +1,4 @@
-include std/cxx.mk
+include std/cxx.cv
 
 ccache = $[shell command -v ccache 2>/dev/null]
 cxx = $ccache c++

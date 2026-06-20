@@ -13,9 +13,9 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - name: Install mk
+      - name: Install cv
         run: |
           CV_VERSION=$(gh release view --repo marcelocantos/cv --json tagName -q .tagName)
           if [ "$RUNNER_OS" = "macOS" ]; then
@@ -39,9 +39,9 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - name: Install mk
+      - name: Install cv
         run: |
           CV_VERSION=$(gh release view --repo marcelocantos/cv --json tagName -q .tagName)
           if [ "$RUNNER_OS" = "macOS" ]; then
@@ -55,15 +55,15 @@ jobs:
 
       - name: Verify bundled sources are in sync with dist/
         run: |
-          mk bundle
+          cv bundle
           if ! git diff --quiet; then
-            echo "::error::go/sqlift/ bundled sources are out of sync with dist/. Run 'mk bundle' and commit."
+            echo "::error::go/sqlift/ bundled sources are out of sync with dist/. Run 'cv bundle' and commit."
             git --no-pager diff --stat
             exit 1
           fi
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: go/sqlift/go.mod
 
