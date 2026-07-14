@@ -98,3 +98,9 @@ maintenance activities. Append-only — newest entries at the bottom.
   - C++ tests: 125, 372 assertions (using C API with JSON)
   - Go tests: 149
   - 1.0 settling threshold: reset to 0/4 — breaking API change (C++ → C public API)
+
+## 2026-07-14 — /release v0.18.0
+
+- **Commit**: (release tag)
+- **Outcome**: Released v0.18.0. Richer apply error messages for on-device diagnosis: policy gates include op.description (rebuild/destructive); mid-apply failures include object, description, SQLite error, and failing SQL. CI Actions Node 24. Migrate build to cv.
+- **Notes**: Non-breaking message enrichment. err_type enum unchanged.

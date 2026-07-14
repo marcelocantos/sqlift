@@ -12,7 +12,7 @@ format for cross-language drift detection.
 
 ## Interaction surface catalogue
 
-Snapshot as of v0.14.0.
+Snapshot as of v0.18.0.
 
 ### C API
 
@@ -22,9 +22,9 @@ All functions use `extern "C"` linkage. Data interchange is JSON strings.
 #### Version macros
 
 ```c
-#define SQLIFT_VERSION       "0.14.0"
+#define SQLIFT_VERSION       "0.18.0"
 #define SQLIFT_VERSION_MAJOR 0
-#define SQLIFT_VERSION_MINOR 14
+#define SQLIFT_VERSION_MINOR 18
 #define SQLIFT_VERSION_PATCH 0
 ```
 
