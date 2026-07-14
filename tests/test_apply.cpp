@@ -66,6 +66,34 @@ TEST_CASE("apply refuses destructive without flag") {
     CHECK(apply_err(db.db, plan_str) == SQLIFT_DESTRUCTIVE_ERROR);
 }
 
+TEST_CASE("apply error messages include description for diagnosis") {
+    // On-device consumers (e.g. sqlpipe on mobile) cannot re-diff offline;
+    // policy and apply failures must carry op.description (and SQL when mid-apply).
+    TestDB db;
+    db.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT, doomed TEXT);");
+    db.exec("INSERT INTO t VALUES (1, 'a', 'x');");
+
+    auto desired = parse_schema(
+        "CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT);");
+    auto plan = diff_schemas(extract_schema(db.db), desired);
+
+    // Drop column → rebuild + destructive; deny both without flags.
+    sqlift_apply_options opts{};  // AllowNone
+    int et = 0;
+    char* em = nullptr;
+    int rc = sqlift_apply(db.db, plan.c_str(), opts, &et, &em);
+    std::string msg = em ? em : "";
+    sqlift_free(em);
+    REQUIRE(rc != 0);
+    // Either rebuild or destructive may fire first depending on plan flags;
+    // both paths must name the object and include description.
+    CHECK((et == SQLIFT_DESTRUCTIVE_ERROR || et == SQLIFT_REBUILD_ERROR));
+    CHECK(msg.find("t") != std::string::npos);
+    CHECK(msg.find("doomed") != std::string::npos);
+    CHECK((msg.find("SQLIFT_ALLOW_DESTRUCTIVE") != std::string::npos ||
+           msg.find("SQLIFT_ALLOW_REBUILD") != std::string::npos));
+}
+
 TEST_CASE("apply destructive with flag") {
     TestDB db;
     db.exec("CREATE TABLE users (id INTEGER PRIMARY KEY);");

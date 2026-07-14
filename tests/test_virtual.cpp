@@ -173,6 +173,10 @@ TEST_CASE("apply: drop without AllowDestructive is rejected") {
     sqlift_free(em);
     CHECK(rc != 0);
     CHECK(et == SQLIFT_DESTRUCTIVE_ERROR);
+    CHECK(msg.find("old") != std::string::npos);
+    CHECK(msg.find("SQLIFT_ALLOW_DESTRUCTIVE") != std::string::npos);
+    // Description is required for on-device diagnosis without re-diff.
+    CHECK(msg.find("Drop") != std::string::npos);
     // The vtable is still there.
     CHECK(db.query_int64(
         "SELECT count(*) FROM sqlite_master "
