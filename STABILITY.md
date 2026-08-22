@@ -55,10 +55,16 @@ enum sqlift_error_type {
 #define SQLIFT_ALLOW_NONE           0u
 #define SQLIFT_ALLOW_ALL            (SQLIFT_ALLOW_REBUILD | SQLIFT_ALLOW_DESTRUCTIVE \
                                      | SQLIFT_ALLOW_LOOSEN | SQLIFT_ALLOW_DATA_DEPENDENT)
+
+typedef struct sqlift_apply_options {
+    unsigned int allow;  // bitmask of SQLIFT_ALLOW_*; 0 = deny everything
+} sqlift_apply_options;
 ```
 
-**Stable.** New error codes may be added (additive). Existing codes and their
-numeric values will not change.
+**Stable.** New error codes and allow bits may be added (additive). Existing
+codes and their numeric values will not change. Zero-init of
+`sqlift_apply_options` is the strictest policy. Callers that do not set a
+new bit inherit the safe (deny) behaviour.
 
 #### Database handle
 
@@ -119,7 +125,9 @@ freed with this function.
 
 **Schema JSON** (returned by `sqlift_parse`, `sqlift_extract`):
 
-Top-level keys: `tables`, `indexes`, `views`, `triggers` (maps keyed by name).
+Top-level keys: `tables`, `indexes`, `views`, `triggers`, `virtual_tables`
+(maps keyed by name). `virtual_tables` is omitted when empty so schemas
+without virtual tables keep pre-feature JSON.
 
 Table fields: `name`, `columns`, `foreign_keys`, `check_constraints`,
 `pk_constraint_name`, `without_rowid`, `strict`, `raw_sql`.
@@ -139,16 +147,29 @@ View fields: `name`, `sql`.
 
 Trigger fields: `name`, `table_name`, `sql`.
 
+VirtualTable fields: `name`, `module`, `args`, `raw_sql`. Equality is
+structural (`name`, `module`, `args`); `raw_sql` is excluded so whitespace
+differences do not trigger drop+recreate. FTS shadow tables (`sql IS NULL`
+in `sqlite_master`) are filtered out of `tables` and do not appear here.
+
 **Plan JSON** (returned by `sqlift_diff`, accepted by `sqlift_apply`):
 
 Top-level: `version` (int, currently 1), `operations` (array), `warnings`
 (array).
 
-Operation fields: `type`, `object_name`, `description`, `sql`, `destructive`.
+Operation fields: `type`, `object_name`, `description`, `sql`,
+`destructive`, `requires_rebuild`, `loosens_only`, `data_dependent`.
 
 Operation types: `CreateTable`, `DropTable`, `RebuildTable`, `AddColumn`,
 `CreateIndex`, `DropIndex`, `CreateView`, `DropView`, `CreateTrigger`,
-`DropTrigger`.
+`DropTrigger`, `CreateVirtualTable`, `DropVirtualTable`.
+
+`sqlift_diff` is pure and always serialises a plan. Data-dependent changes
+are tagged `data_dependent: true` on the `RebuildTable` op. The policy
+gate is `sqlift_apply`, which returns `SQLIFT_BREAKING_CHANGE_ERROR` unless
+`SQLIFT_ALLOW_DATA_DEPENDENT` is set. Virtual-table changes are always
+drop+recreate (`DropVirtualTable` then `CreateVirtualTable`); there is no
+in-place alter.
 
 **Warning JSON** (in plan `warnings` and from `sqlift_detect_redundant_indexes`):
 
@@ -251,11 +272,17 @@ type Index struct {
 type View    struct { Name, SQL string }
 type Trigger struct { Name, TableName, SQL string }
 
+type VirtualTable struct {
+    Name, Module, Args string
+    RawSQL             string   // Excluded from Equal and Hash.
+}
+
 type Schema struct {
-    Tables   map[string]Table
-    Indexes  map[string]Index
-    Views    map[string]View
-    Triggers map[string]Trigger
+    Tables        map[string]Table
+    Indexes       map[string]Index
+    Views         map[string]View
+    Triggers      map[string]Trigger
+    VirtualTables map[string]VirtualTable  // omitempty in JSON when empty.
 }
 
 func (s Schema) Equal(o Schema) bool
@@ -300,16 +327,21 @@ const (
     DropView
     CreateTrigger
     DropTrigger
+    CreateVirtualTable
+    DropVirtualTable
 )
 
 func (t OpType) String() string
 
 type Operation struct {
-    Type        OpType
-    ObjectName  string
-    Description string
-    SQL         []string
-    Destructive bool
+    Type            OpType
+    ObjectName      string
+    Description     string
+    SQL             []string
+    Destructive     bool
+    RequiresRebuild bool
+    LoosensOnly     bool
+    DataDependent   bool
 }
 
 type MigrationPlan struct { /* unexported fields */ }
@@ -319,8 +351,19 @@ func (p MigrationPlan) Warnings() []Warning
 func (p MigrationPlan) HasDestructiveOperations() bool
 func (p MigrationPlan) Empty() bool
 
+type AllowFlags uint32
+
+const (
+    AllowRebuild       AllowFlags = 1 << 0
+    AllowDestructive   AllowFlags = 1 << 1
+    AllowLoosen        AllowFlags = 1 << 2
+    AllowDataDependent AllowFlags = 1 << 3
+    AllowNone          AllowFlags = 0
+    AllowAll           AllowFlags = AllowRebuild | AllowDestructive | AllowLoosen | AllowDataDependent
+)
+
 type ApplyOptions struct {
-    AllowDestructive bool
+    Allow AllowFlags  // Zero is the strictest policy.
 }
 ```
 
@@ -345,6 +388,7 @@ func ParseOpType(s string) (OpType, error)
 *ApplyError
 *DriftError
 *DestructiveError
+*RebuildError
 *BreakingChangeError
 *JSONError
 ```
@@ -366,15 +410,15 @@ without triggering drift detection. This is verified by
 No known gaps remain. All public API surfaces have documentation, tests, and
 runnable Go examples.
 
-**Settling threshold**: ~70 surface items → N=4. This release (v0.14.0)
-introduces a behavior change: `BreakingChangeError` moved from a diff-time
-throw to an apply-time policy gate. Diff() now produces a plan whose
-RebuildTable ops carry `data_dependent: true`; Apply() rejects them unless
-`SQLIFT_ALLOW_DATA_DEPENDENT` is set. The error type is unchanged; the
-call-site differs. Two new opt-in flags (`SQLIFT_ALLOW_LOOSEN`,
-`SQLIFT_ALLOW_DATA_DEPENDENT`) are additive. The counter resets. Four
-consecutive minor releases with no breaking changes are needed before 1.0
-eligibility.
+**Settling threshold**: ~70 surface items → N=4. v0.14.0 moved
+`BreakingChangeError` from a diff-time throw to an apply-time policy gate.
+`Diff()` produces a plan whose `RebuildTable` ops carry `data_dependent:
+true`; `Apply()` rejects them unless `SQLIFT_ALLOW_DATA_DEPENDENT` is set.
+The error type is unchanged; the call-site differs. Two opt-in flags
+(`SQLIFT_ALLOW_LOOSEN`, `SQLIFT_ALLOW_DATA_DEPENDENT`) are additive. Later
+minors through this snapshot (v0.18.0) added virtual-table ops and richer
+apply-error messages as additive surface. Four consecutive minor releases
+with no breaking changes are needed before 1.0 eligibility.
 
 ## Out of scope for 1.0
 

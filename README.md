@@ -100,9 +100,9 @@ condensed API reference covering both C and Go.
 ### C/C++
 
 ```sh
-mk            # build library
 cv test       # build and run tests
 cv lib        # build static library only
+cv sanitize   # build and run tests with ASan/UBSan
 cv clean      # remove build artifacts
 ```
 

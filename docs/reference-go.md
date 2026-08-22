@@ -29,7 +29,8 @@ calls `Extract` on the resulting database.
 
 **Parameters:**
 - `ddl` -- one or more DDL statements (`CREATE TABLE`, `CREATE INDEX`,
-  `CREATE VIEW`, `CREATE TRIGGER`). Statements are separated by semicolons.
+  `CREATE VIEW`, `CREATE TRIGGER`, `CREATE VIRTUAL TABLE`). Statements are
+  separated by semicolons.
 
 **Returns:** a `Schema` representing the declared objects.
 
@@ -272,10 +273,11 @@ fmt.Printf("Applied %d migration(s)\n", v)
 
 ```go
 type Schema struct {
-    Tables   map[string]Table
-    Indexes  map[string]Index
-    Views    map[string]View
-    Triggers map[string]Trigger
+    Tables        map[string]Table
+    Indexes       map[string]Index
+    Views         map[string]View
+    Triggers      map[string]Trigger
+    VirtualTables map[string]VirtualTable
 }
 
 func (s Schema) Equal(o Schema) bool
@@ -283,16 +285,18 @@ func (s Schema) Hash() string
 ```
 
 A complete representation of a SQLite database schema. Each map is keyed by
-object name.
+object name. `VirtualTables` is omitted from JSON when empty.
 
-`Equal` performs a structural comparison across all four maps, delegating to
+`Equal` performs a structural comparison across all five maps, delegating to
 the `Equal` method of each element type.
 
 `Hash` returns a hex-encoded SHA-256 digest of a deterministic serialisation
-of the schema. Tables, indexes, views, and triggers are each sorted
-lexicographically by name before hashing to ensure a stable result. The
-serialisation format is identical to the C implementation, enabling
-cross-language drift detection when both are used against the same database.
+of the schema. Tables, indexes, views, triggers, and virtual tables are each
+sorted lexicographically by name before hashing to ensure a stable result.
+Virtual tables are emitted in the hash only when the map is non-empty, so
+schemas without them keep their pre-feature hash. The serialisation format
+is identical to the C implementation, enabling cross-language drift
+detection when both are used against the same database.
 `PKConstraintName` and `ForeignKey.ConstraintName` are excluded from the
 hash (they are cosmetic). `RawSQL` fields are also excluded.
 
@@ -451,6 +455,28 @@ func (tr Trigger) Equal(o Trigger) bool
 
 ---
 
+### `VirtualTable`
+
+```go
+type VirtualTable struct {
+    Name   string
+    Module string
+    Args   string
+    RawSQL string // Original CREATE VIRTUAL TABLE from sqlite_master.
+}
+
+func (vt VirtualTable) Equal(o VirtualTable) bool
+```
+
+A `CREATE VIRTUAL TABLE <name> USING <module>(<args>)` declaration. `Equal`
+compares `Name`, `Module`, and `Args`. `RawSQL` is excluded so whitespace
+differences do not trigger drop+recreate. Diff treats any structural change
+as `DropVirtualTable` then `CreateVirtualTable`; there is no in-place
+modification. FTS shadow tables are filtered during extract and do not
+appear as regular `Table` values.
+
+---
+
 ### `MigrationPlan`
 
 ```go
@@ -555,6 +581,8 @@ const (
     DropView                   // Drop an existing view.
     CreateTrigger              // Create a new trigger.
     DropTrigger                // Drop an existing trigger.
+    CreateVirtualTable         // Create a CREATE VIRTUAL TABLE.
+    DropVirtualTable           // Drop a virtual table (and its shadow tables).
 )
 
 func (t OpType) String() string
@@ -597,8 +625,8 @@ const (
   DEFAULTed columns: column type changes, dropping a CHECK or FK constraint,
   reordering columns. Rebuilds are expensive on large tables.
 - `AllowDestructive` -- permit operations that drop data: `DropTable`,
-  `DropColumn` (via rebuild), and `DropIndex` / `DropView` / `DropTrigger`
-  when the object is removed entirely.
+  `DropColumn` (via rebuild), `DropVirtualTable`, and `DropIndex` /
+  `DropView` / `DropTrigger` when the object is removed entirely.
 - `AllowLoosen` -- permit rebuilds whose only changes are strict relaxations
   of existing constraints (drop a CHECK or FK, NOT NULL becomes nullable).
   Independent of `AllowRebuild`: a pure-loosening rebuild passes either gate.
@@ -713,7 +741,7 @@ assertions.
 | `*ApplyError` | `Apply`, `MigrationVersion` | SQL execution failure, FK violation, or connection error. |
 | `*DriftError` | `Apply` | Schema was modified outside sqlift since the last `Apply`. |
 | `*DestructiveError` | `Apply` | Plan has destructive operations and `AllowDestructive` is not set in `opts.Allow`. |
-| `*RebuildError` | `Apply` | Plan requires SQLite's table rebuild and `AllowRebuild` is not set in `opts.Allow`. |
+| `*RebuildError` | `Apply` | Plan requires SQLite's table rebuild and neither `AllowRebuild` nor (for pure-loosening rebuilds) `AllowLoosen` is set in `opts.Allow`. |
 | `*BreakingChangeError` | `Apply` | Plan contains a data-dependent change and `AllowDataDependent` is not set in `opts.Allow`. (Previously thrown by `Diff`; now an apply-time policy gate.) |
 | `*JSONError` | `FromJSON`, `ParseOpType` | JSON parsing or validation failure. |
 
