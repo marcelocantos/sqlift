@@ -41,9 +41,9 @@ is our database schema." The truth is a procedural history, not a declaration.
 sqlift takes a fundamentally different approach.
 
 **One file, not forty.** You maintain a single `.sql` file containing `CREATE
-TABLE`, `CREATE INDEX`, `CREATE VIEW`, and `CREATE TRIGGER` statements. This
-file is your schema. It is also your documentation. A new team member reads one
-file and knows exactly what the database looks like.
+TABLE`, `CREATE INDEX`, `CREATE VIEW`, `CREATE TRIGGER`, and `CREATE VIRTUAL
+TABLE` statements. This file is your schema. It is also your documentation. A
+new team member reads one file and knows exactly what the database looks like.
 
 **Diff is automatic.** sqlift compares your declared schema against the live
 database and computes the exact SQL operations needed to bring them in line.
@@ -53,10 +53,12 @@ You never write `ALTER TABLE` by hand.
 database. You can diff two schemas in a unit test, in CI, in a pre-commit hook
 -- anywhere you can run code.
 
-**Errors surface at diff time.** If your schema change would fail on a
-populated database -- nullable to NOT NULL, new foreign key, new NOT NULL
-column without a default -- `diff()` rejects it immediately with a clear
-error. Not at deploy time. Not at 2am.
+**Data-dependent changes are tagged, then gated at apply.** If your schema
+change would fail on a populated database -- nullable to NOT NULL, new
+foreign key, new NOT NULL column without a default -- `diff()` still
+returns a plan, with `data_dependent: true` on the rebuild op. `apply()`
+rejects it unless you opt in. Not a silent 2am surprise on a dirty
+instance.
 
 **No ordering conflicts.** There are no numbered files. Two developers modify
 the schema SQL independently. Merge conflicts are normal text conflicts on a
@@ -163,6 +165,8 @@ CREATE TRIGGER on_user_delete AFTER DELETE ON users
 BEGIN
     DELETE FROM posts WHERE user_id = OLD.id;
 END;
+
+CREATE VIRTUAL TABLE posts_fts USING fts5(title, body);
 ```
 
 Internally, sqlift loads this SQL into an in-memory SQLite database and reads
@@ -208,6 +212,9 @@ Each `Operation` carries:
 - `description` / `Description` -- a human-readable summary
 - `sql` / `SQL` -- the exact SQL statements that will be executed
 - `destructive` / `Destructive` -- whether this operation drops data
+- `requires_rebuild` / `RequiresRebuild` -- whether this is a 12-step table rebuild
+- `loosens_only` / `LoosensOnly` -- whether every change in this rebuild is a constraint relaxation
+- `data_dependent` / `DataDependent` -- whether success depends on existing data
 
 ## Destructive operations
 
@@ -216,6 +223,7 @@ operations are those that lose data:
 
 - Dropping a table
 - Dropping an index
+- Dropping a virtual table
 - Removing a column (via table rebuild)
 
 `apply()` is strict by default: only pure additive changes (CREATE TABLE, ADD
@@ -225,7 +233,7 @@ COLUMN, etc.) are permitted. To allow more invasive operations, set bits in
 | Flag | What it permits |
 |---|---|
 | `SQLIFT_ALLOW_REBUILD` / `AllowRebuild` | SQLite's 12-step table rebuild (column type change, dropping a CHECK/FK, reordering) |
-| `SQLIFT_ALLOW_DESTRUCTIVE` / `AllowDestructive` | Drops: tables, columns (via rebuild), indexes, views, triggers |
+| `SQLIFT_ALLOW_DESTRUCTIVE` / `AllowDestructive` | Drops: tables, columns (via rebuild), indexes, views, triggers, virtual tables |
 | `SQLIFT_ALLOW_LOOSEN` / `AllowLoosen` | Pure-loosening rebuilds (drop CHECK/FK, NOT NULL→nullable). Lets you express a backwards-compatible-only policy |
 | `SQLIFT_ALLOW_DATA_DEPENDENT` / `AllowDataDependent` | Changes whose success depends on existing data (nullable→NOT NULL, new FK/CHECK on existing table, new NOT NULL column without DEFAULT). Combine with `AllowRebuild` |
 | `SQLIFT_ALLOW_ALL` / `AllowAll` | Everything currently defined |
@@ -464,6 +472,8 @@ their normalised SQL text; if the text differs, they are dropped and recreated.
 | `DropView` | Drop a view | Yes (if permanently removed) |
 | `CreateTrigger` | Create a new trigger | No |
 | `DropTrigger` | Drop a trigger | Yes (if permanently removed) |
+| `CreateVirtualTable` | Create a `CREATE VIRTUAL TABLE` | No |
+| `DropVirtualTable` | Drop a virtual table (and its shadow tables) | Yes |
 
 sqlift orders operations to avoid constraint violations:
 
@@ -471,9 +481,10 @@ sqlift orders operations to avoid constraint violations:
 2. Drop views
 3. Drop indexes
 4. Table operations (creates, rebuilds, drops)
-5. Create indexes
-6. Create views
-7. Create triggers
+5. Virtual table operations (drops then creates)
+6. Create indexes
+7. Create views
+8. Create triggers
 
 Within table operations, new tables are created before tables that reference
 them via foreign keys. Views and triggers are ordered by dependency analysis --
@@ -499,7 +510,8 @@ CREATE TABLE products (
 CHECK constraints are included in structural equality comparisons. Changing a
 CHECK expression triggers a table rebuild. Adding a CHECK constraint to an
 existing table is a breaking change -- existing rows may violate the new
-constraint, so `diff()` raises `BreakingChangeError`.
+constraint, so `diff()` tags the rebuild op `data_dependent: true` and
+`apply()` raises `BreakingChangeError` unless `AllowDataDependent` is set.
 
 ### COLLATE clauses
 
@@ -532,6 +544,22 @@ Generated columns cannot be added via `ALTER TABLE ADD COLUMN` -- they always
 require a table rebuild. During rebuilds, generated columns are excluded from
 the `INSERT INTO ... SELECT` data copy since their values are computed
 automatically.
+
+### Virtual tables
+
+sqlift extracts `CREATE VIRTUAL TABLE <name> USING <module>(<args>)` into
+`virtual_tables` (C JSON) / `Schema.VirtualTables` (Go). FTS shadow tables
+(`sqlite_master.sql IS NULL`) are filtered out of regular `tables` so they
+are not drop-candidates.
+
+There is no in-place alter: any change to module or args, or a removal, is
+`DropVirtualTable` then `CreateVirtualTable`. The drop is destructive and
+requires `SQLIFT_ALLOW_DESTRUCTIVE` / `AllowDestructive`. Creating a new
+virtual table is additive.
+
+```sql
+CREATE VIRTUAL TABLE messages_fts USING fts5(text, content);
+```
 
 ### STRICT tables
 
@@ -632,9 +660,10 @@ descriptive message. The caller must free it with `sqlift_free()`.
 | `*ExtractError` | Schema extraction from a live database fails |
 | `*DiffError` | Schema comparison encounters an internal error |
 | `*ApplyError` | SQL execution fails during `Apply()` (e.g. FK violation) |
-| `*DestructiveError` | Plan has destructive ops and `AllowDestructive` is false |
+| `*DestructiveError` | Plan has destructive ops and `AllowDestructive` is not set in `opts.Allow` |
+| `*RebuildError` | Plan requires a SQLite rebuild and neither `AllowRebuild` nor (for pure-loosening rebuilds) `AllowLoosen` is set |
 | `*DriftError` | Schema was modified outside of sqlift since last apply |
-| `*BreakingChangeError` | Schema change depends on existing data |
+| `*BreakingChangeError` | Plan has a data-dependent change and `AllowDataDependent` is not set in `opts.Allow` |
 | `*JSONError` | Invalid JSON or missing fields in `FromJSON()` |
 
 Each error type has a `Msg` field with a descriptive message.

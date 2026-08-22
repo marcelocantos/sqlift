@@ -5,9 +5,9 @@ Declarative SQLite schema migration library. Two files in `dist/`: `sqlift.h` (C
 ## Build
 
 ```sh
-mk            # build library
 cv test       # build and run tests
 cv lib        # build static library only
+cv sanitize   # build and run tests with ASan/UBSan
 cv clean      # remove build artifacts
 ```
 
@@ -25,14 +25,16 @@ Three core operations exposed via the C API:
 
 Plus one action:
 
-4. **`sqlift_apply(db, plan_json, opts)`** -- execute the plan's SQL. `opts.allow` is a bitmask (`SQLIFT_ALLOW_REBUILD`, `SQLIFT_ALLOW_DESTRUCTIVE`, `SQLIFT_ALLOW_ALL`); zero is the strictest policy (additive changes only).
+4. **`sqlift_apply(db, plan_json, opts)`** -- execute the plan's SQL. `opts.allow` is a bitmask (`SQLIFT_ALLOW_REBUILD`, `SQLIFT_ALLOW_DESTRUCTIVE`, `SQLIFT_ALLOW_LOOSEN`, `SQLIFT_ALLOW_DATA_DEPENDENT`, `SQLIFT_ALLOW_ALL`); zero is the strictest policy (additive changes only).
 
 `sqlift_diff()` never touches a database. `sqlift_apply()` stores a SHA-256 hash in `_sqlift_state` for drift detection.
 
 ## Key design decisions
 
 - **C-only public API.** The header is plain C with `extern "C"` guards. All data interchange uses JSON strings. C++ types are implementation-internal.
-- **Breaking change detection.** `sqlift_diff()` returns `SQLIFT_BREAKING_CHANGE_ERROR` for schema changes whose success depends on existing data: nullable→NOT NULL, adding FK constraints, new NOT NULL column without DEFAULT. These are rejected because they may succeed on one database instance but fail on another.
+- **Data-dependent change detection.** `sqlift_diff()` tags rebuild ops with `data_dependent: true` for schema changes whose success depends on existing data: nullable→NOT NULL, adding FK/CHECK constraints to an existing table, new NOT NULL column without DEFAULT.
+  `sqlift_apply()` returns `SQLIFT_BREAKING_CHANGE_ERROR` unless `SQLIFT_ALLOW_DATA_DEPENDENT` is set. These are rejected by default because they may succeed on one database instance but fail on another.
+- **Virtual tables.** `CREATE VIRTUAL TABLE` is extracted into schema JSON `virtual_tables` (FTS shadow tables with `sql IS NULL` are filtered). Diff treats any module/args change as drop+recreate (`DropVirtualTable` + `CreateVirtualTable`); there is no in-place alter.
 - **No rename detection.** A disappearing column + appearing column = drop + add. Always.
 - **`raw_sql` excluded from equality.** SQLite doesn't update `sqlite_master.sql` after `ALTER TABLE ADD COLUMN`, so `Table`/`Index` equality is structural only.
 - **AddColumn fast path.** If the only change is appending nullable (or NOT NULL + DEFAULT) columns, use `ALTER TABLE ADD COLUMN` instead of a full rebuild.
@@ -41,7 +43,7 @@ Plus one action:
 
 ## Diff operation ordering
 
-1. Drop triggers  2. Drop views  3. Drop indexes  4. Table ops (create, rebuild, drop)  5. Create indexes  6. Create views  7. Create triggers
+1. Drop triggers  2. Drop views  3. Drop indexes  4. Table ops (create, rebuild, drop)  5. Virtual table ops (drop then create)  6. Create indexes  7. Create views  8. Create triggers
 
 ## File layout
 
@@ -51,7 +53,7 @@ dist/
   sqlift.cpp      # All implementation (C++ types, logic, C wrapper)
   sqlift-agents-guide.md # Quick-start guide for AI coding agents
 cvfile            # cv build file
-tests/            # doctest suites (7 files, 125 tests) using C API with JSON
+tests/            # doctest suites (8 files, 152 tests) using C API with JSON
   test_helpers.h  # Test utilities (RAII wrappers, JSON convenience functions)
 docs/guide.md     # Concepts and workflows
 docs/reference.md # Complete API reference
@@ -89,3 +91,4 @@ All tests use the C API with JSON interchange. Tests run in-memory (`:memory:` d
 - `test_apply.cpp` -- applying plan JSON, destructive guard, drift detection
 - `test_json.cpp` -- JSON validation, round-trips, and error cases
 - `test_roundtrip.cpp` -- end-to-end parse/diff/apply/extract cycles
+- `test_virtual.cpp` -- CREATE VIRTUAL TABLE parse/extract/diff/apply, shadow-table filter, hash snapshots

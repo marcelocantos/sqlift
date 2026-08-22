@@ -10,9 +10,9 @@ background, see [Guide](guide.md).
 ## Version macros
 
 ```c
-#define SQLIFT_VERSION       "0.11.0"
+#define SQLIFT_VERSION       "0.18.0"
 #define SQLIFT_VERSION_MAJOR 0
-#define SQLIFT_VERSION_MINOR 11
+#define SQLIFT_VERSION_MINOR 18
 #define SQLIFT_VERSION_PATCH 0
 ```
 
@@ -160,7 +160,8 @@ database, executes the DDL, and extracts the resulting schema.
 
 **Parameters:**
 - `ddl` -- one or more DDL statements (`CREATE TABLE`, `CREATE INDEX`,
-  `CREATE VIEW`, `CREATE TRIGGER`). Statements are separated by semicolons.
+  `CREATE VIEW`, `CREATE TRIGGER`, `CREATE VIRTUAL TABLE`). Statements are
+  separated by semicolons.
 - `err_type` -- receives `SQLIFT_PARSE_ERROR` on failure.
 - `err_msg` -- receives a heap-allocated error message on failure.
 
@@ -221,8 +222,10 @@ does not access any database.
 - `current_json` -- schema JSON as it exists now (typically from
   `sqlift_extract()`).
 - `desired_json` -- schema JSON you want (typically from `sqlift_parse()`).
-- `err_type` -- receives `SQLIFT_DIFF_ERROR` or `SQLIFT_BREAKING_CHANGE_ERROR`
-  on failure.
+- `err_type` -- receives `SQLIFT_DIFF_ERROR` on failure. Data-dependent
+  changes are **not** an error here: they are tagged `data_dependent: true`
+  on the relevant `RebuildTable` operation; `sqlift_apply()` is the policy
+  gate.
 - `err_msg` -- receives a heap-allocated error message on failure.
 
 **Returns:** a heap-allocated JSON string representing the migration plan (see
@@ -265,10 +268,11 @@ flags into `opts.allow`.
   deserialized).
 - `opts.allow` -- bitmask of `SQLIFT_ALLOW_*` flags. Zero (the default) only
   permits operations that are pure additions (CREATE TABLE/INDEX/VIEW/TRIGGER,
-  ALTER TABLE ADD COLUMN). Available flags:
+  CREATE VIRTUAL TABLE, ALTER TABLE ADD COLUMN). Available flags:
   - `SQLIFT_ALLOW_REBUILD` -- SQLite's 12-step rebuild (column type change,
     drop CHECK/FK, reordering).
-  - `SQLIFT_ALLOW_DESTRUCTIVE` -- drops (table, column, index, view, trigger).
+  - `SQLIFT_ALLOW_DESTRUCTIVE` -- drops (table, column, index, view, trigger,
+    virtual table).
   - `SQLIFT_ALLOW_LOOSEN` -- rebuilds whose only changes are strict relaxations
     (drop CHECK/FK, NOT NULL becomes nullable). Independent of
     `SQLIFT_ALLOW_REBUILD`: a pure-loosening rebuild passes either gate.
@@ -484,9 +488,21 @@ Returned by `sqlift_parse()` and `sqlift_extract()`. Accepted by
       "table_name": "users",
       "sql": "CREATE TRIGGER on_delete ..."
     }
+  },
+  "virtual_tables": {
+    "messages_fts": {
+      "name": "messages_fts",
+      "module": "fts5",
+      "args": "text, content",
+      "raw_sql": "CREATE VIRTUAL TABLE messages_fts USING fts5(text, content)"
+    }
   }
 }
 ```
+
+`virtual_tables` is omitted when empty so schemas without virtual tables keep
+pre-feature JSON. FTS shadow tables (`sqlite_master.sql IS NULL`) are filtered
+out of `tables`.
 
 **Column fields:**
 
@@ -516,8 +532,8 @@ Returned by `sqlift_parse()` and `sqlift_extract()`. Accepted by
 
 Equality comparison is structural -- it compares `name`, `columns`,
 `foreign_keys`, `check_constraints`, `without_rowid`, and `strict`. The
-`raw_sql` and `pk_constraint_name` fields are excluded from equality (cosmetic
-only) but included in `sqlift_schema_hash()`.
+`raw_sql` and `pk_constraint_name` fields are excluded from equality and from
+`sqlift_schema_hash()` (cosmetic only).
 
 **Foreign key fields:**
 
@@ -540,6 +556,15 @@ only) but included in `sqlift_schema_hash()`.
 | `unique` | bool | Whether the index enforces uniqueness |
 | `where_clause` | string | Partial index `WHERE` clause. Empty if not partial. |
 | `raw_sql` | string | Original `CREATE INDEX` from `sqlite_master` (excluded from equality) |
+
+**Virtual table fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Virtual table name |
+| `module` | string | Module (e.g. `"fts5"`) |
+| `args` | string | Argument list inside `USING module(...)`. Empty if no parens. |
+| `raw_sql` | string | Original `CREATE VIRTUAL TABLE` from `sqlite_master` (excluded from equality) |
 
 ---
 
@@ -579,7 +604,7 @@ Returned by `sqlift_diff()`. Accepted by `sqlift_apply()`.
 | Field | Type | Description |
 |-------|------|-------------|
 | `type` | string | Operation type (see below) |
-| `object_name` | string | The table, index, view, or trigger name |
+| `object_name` | string | The table, index, view, trigger, or virtual table name |
 | `description` | string | Human-readable summary |
 | `sql` | array | SQL statements to execute (in order) |
 | `destructive` | bool | Whether this operation drops data |
@@ -589,7 +614,11 @@ Returned by `sqlift_diff()`. Accepted by `sqlift_apply()`.
 
 **Operation types:** `CreateTable`, `DropTable`, `RebuildTable`, `AddColumn`,
 `CreateIndex`, `DropIndex`, `CreateView`, `DropView`, `CreateTrigger`,
-`DropTrigger`.
+`DropTrigger`, `CreateVirtualTable`, `DropVirtualTable`.
+
+Virtual-table changes have no in-place path: any module/args change or
+removal is `DropVirtualTable` then `CreateVirtualTable`. The drop is
+destructive.
 
 ---
 

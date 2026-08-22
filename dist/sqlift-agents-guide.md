@@ -129,11 +129,21 @@ All `char*` return values must be freed with `sqlift_free()`. Error outputs
   },
   "indexes": { ... },
   "views": { ... },
-  "triggers": { ... }
+  "triggers": { ... },
+  "virtual_tables": {
+    "messages_fts": {
+      "name": "messages_fts",
+      "module": "fts5",
+      "args": "text, content",
+      "raw_sql": "CREATE VIRTUAL TABLE messages_fts USING fts5(text, content)"
+    }
+  }
 }
 ```
 
 Column `generated` values: 0 = normal, 2 = virtual, 3 = stored.
+`virtual_tables` is omitted when empty. FTS shadow tables (`sql IS NULL`)
+are filtered out of `tables`.
 
 ### Plan JSON format
 
@@ -148,7 +158,10 @@ Column `generated` values: 0 = normal, 2 = virtual, 3 = stored.
       "object_name": "users",
       "description": "Create table users",
       "sql": ["CREATE TABLE ..."],
-      "destructive": false
+      "destructive": false,
+      "requires_rebuild": false,
+      "loosens_only": false,
+      "data_dependent": false
     }
   ],
   "warnings": [
@@ -165,7 +178,7 @@ Column `generated` values: 0 = normal, 2 = virtual, 3 = stored.
 
 Operation type strings: `CreateTable`, `DropTable`, `RebuildTable`,
 `AddColumn`, `CreateIndex`, `DropIndex`, `CreateView`, `DropView`,
-`CreateTrigger`, `DropTrigger`.
+`CreateTrigger`, `DropTrigger`, `CreateVirtualTable`, `DropVirtualTable`.
 
 ### Key behaviours
 
@@ -173,9 +186,11 @@ Operation type strings: `CreateTable`, `DropTable`, `RebuildTable`,
 - **12-step table rebuild**: Any other table change uses SQLite's recommended rebuild (disable FKs, savepoint, create new, copy data, drop old, rename, recreate indexes/triggers/views, FK check, release, re-enable FKs).
 - **Strict-by-default policy**: `sqlift_apply()` denies anything beyond pure additions unless flags are set in `opts.allow`. `SQLIFT_ALLOW_REBUILD` permits SQLite's 12-step rebuild; `SQLIFT_ALLOW_LOOSEN` permits rebuilds whose changes are pure constraint relaxations (drop CHECK/FK, NOT NULL→nullable); `SQLIFT_ALLOW_DESTRUCTIVE` permits drops; `SQLIFT_ALLOW_DATA_DEPENDENT` permits changes whose success depends on existing data (nullable→NOT NULL, new FK/CHECK, new NOT NULL column without DEFAULT). Returns `SQLIFT_REBUILD_ERROR`, `SQLIFT_BREAKING_CHANGE_ERROR`, or `SQLIFT_DESTRUCTIVE_ERROR` respectively when blocked.
 - **Drift detection**: Stores SHA-256 hash in `_sqlift_state` table after each apply. Returns `SQLIFT_DRIFT_ERROR` if schema changed outside sqlift.
-- **Data-dependent change detection**: `sqlift_diff()` tags rebuild ops with `data_dependent: true` for schema changes whose success depends on existing data. `sqlift_apply()` rejects them with `SQLIFT_BREAKING_CHANGE_ERROR` unless `SQLIFT_ALLOW_DATA_DEPENDENT` is set. Detected cases: (1) existing nullable column becomes NOT NULL, (2) new FK constraint added to existing table, (3) new CHECK constraint added to existing table, (4) new NOT NULL column without DEFAULT.
+- **Data-dependent change detection**: `sqlift_diff()` is pure and always returns a plan. It tags rebuild ops with `data_dependent: true` for schema changes whose success depends on existing data. Detected cases: (1) existing nullable column becomes NOT NULL, (2) new FK constraint added to existing table, (3) new CHECK constraint added to existing table, (4) new NOT NULL column without DEFAULT.
+  `sqlift_apply()` rejects those ops with `SQLIFT_BREAKING_CHANGE_ERROR` unless `SQLIFT_ALLOW_DATA_DEPENDENT` is set.
+- **Virtual tables**: `CREATE VIRTUAL TABLE` is stored in `virtual_tables`. Any change (module, args, or removal) is `DropVirtualTable` then `CreateVirtualTable`; there is no in-place alter. Drops are destructive.
 - **No rename detection**: A removed + added column is always a drop + add.
-- **Operation order**: Drop triggers/views/indexes, then table ops, then create indexes/views/triggers.
+- **Operation order**: Drop triggers/views/indexes, then table ops, then virtual-table drop/create, then create indexes/views/triggers.
 
 ## Go
 
@@ -225,7 +240,7 @@ if !plan.Empty() {
 | `Extract` | `func Extract(db *Database) (Schema, error)` | Read schema from live DB. |
 | `Diff` | `func Diff(current, desired Schema) (MigrationPlan, error)` | Pure diff. Tags ops with `DataDependent: true` for unsafe changes (caller checks at apply time). Populates warnings for redundant indexes. |
 | `DetectRedundantIndexes` | `func DetectRedundantIndexes(schema Schema) []Warning` | Detect prefix-duplicate and PK-duplicate indexes. |
-| `Apply` | `func Apply(db *Database, plan MigrationPlan, opts ApplyOptions) error` | Execute plan. `opts.Allow` is a bitmask (`AllowRebuild`, `AllowDestructive`, `AllowAll`); zero is strictest. Returns `*RebuildError`, `*DestructiveError`, `*DriftError`, or `*ApplyError`. |
+| `Apply` | `func Apply(db *Database, plan MigrationPlan, opts ApplyOptions) error` | Execute plan. `opts.Allow` is a bitmask (`AllowRebuild`, `AllowDestructive`, `AllowLoosen`, `AllowDataDependent`, `AllowAll`); zero is strictest. Returns `*RebuildError`, `*BreakingChangeError`, `*DestructiveError`, `*DriftError`, or `*ApplyError`. |
 | `ToJSON` | `func ToJSON(plan MigrationPlan) ([]byte, error)` | Serialize plan to JSON bytes. |
 | `FromJSON` | `func FromJSON(data []byte) (MigrationPlan, error)` | Deserialize plan from JSON. Returns `*JSONError`. |
 | `ParseOpType` | `func ParseOpType(s string) (OpType, error)` | Parse string to OpType. Returns `*JSONError`. |
@@ -295,7 +310,7 @@ without triggering drift detection.
 
 ## Agentic migration guidance
 
-When `sqlift_diff()` returns `SQLIFT_BREAKING_CHANGE_ERROR`, agentic coding tools can suggest safe alternatives. Common patterns:
+When `sqlift_apply()` returns `SQLIFT_BREAKING_CHANGE_ERROR` (the plan's rebuild op is tagged `data_dependent: true` and `SQLIFT_ALLOW_DATA_DEPENDENT` is not set), agentic coding tools can suggest safe alternatives. Common patterns:
 
 - **Nullable → NOT NULL**: Create a new table with the desired schema, write application code to copy data (coalescing NULLs), then drop the old table in a later release.
 - **Adding FK constraints**: Create a new table with the FK, migrate data at the application level (filtering orphans), retire the old table.
