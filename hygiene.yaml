@@ -1,0 +1,604 @@
+# hygiene.yaml — declared, drift-validated hygiene posture for sqlift.
+# Schema reference: the `hygiene` skill (~/.claude/skills/hygiene/SKILL.md).
+# Validate with `/hygiene`; aggregate the fleet with `/hygiene fleet`.
+#
+# Tiers are PER DIMENSION (schema v1): a dimension's held tier is the highest T
+# such that every item in it with `tier <= T` is satisfied. `floors` is the
+# per-dimension ratchet (below floor => DRIFT); `aspires` is the gap horizon;
+# `enforce` is intent-only and does not affect tiers.
+#
+# Honest init: C/Go SQLite schema-migration library. Tests and sanitizers run
+# on ubuntu+macos via cv/cgo CI; no Windows, no format/lint CI, no release.yml
+# (library — tags only), no in-repo bullseye.yaml (ledger is external).
+
+schema_version: 1
+
+repo: sqlift
+aspires: 3
+floors:            # per-dimension held-tier ratchet; below floor => DRIFT
+  correctness: 2   # doctest + Go tests, ubuntu/macos CI, ASan/UBSan, bundle sync
+  security: 2      # GitHub secret scanning + push protection
+  quality: 1       # -Wall -Wextra -Wpedantic + go vet in CI; no format/lint gate
+  deps: 2          # vendored C++ deps + Go module with zero requires
+  release: 2       # GitHub tags/releases, MINOR-only, STABILITY.md; no binaries
+  governance: 2    # Apache-2.0 + README + .gitignore + squash-only
+  build: 2         # cvfile C++23; CI installs Go from go/sqlift/go.mod
+  docs: 1          # guide/reference/STABILITY exist; no docs CI
+  perf: 0          # no benchmark suite
+  vcs: 1           # default branch is master; no committed hooks
+  agent: 1         # CLAUDE.md + dist/sqlift-agents-guide.md; bullseye is external
+
+tiers:
+  1: baseline    # LICENSE + README + .gitignore; tests build & run
+  2: maintained  # full matrix, examples run, lint/format, release + governance
+  3: hardened    # formal specs, security scanning, SBOM/signing, fuzzing, perf
+
+items:
+
+  # ============================== CORRECTNESS =============================
+  - id: correctness.cpp-tests
+    dim: correctness
+    desc: doctest suite under tests/ exists and is built by cv test
+    state: present
+    cadence: continuous
+    enforce: blocking
+    tier: 1
+    evidence: {file: {path: tests/test_parse.cpp}}
+
+  - id: correctness.go-tests
+    dim: correctness
+    desc: Go module tests exist under go/sqlift/
+    state: present
+    cadence: continuous
+    enforce: blocking
+    tier: 1
+    evidence: {file: {path: go/sqlift/parse_test.go}}
+
+  - id: correctness.cv-test
+    dim: correctness
+    desc: cvfile declares !test (build + run the C++ test binary)
+    state: present
+    cadence: continuous
+    enforce: blocking
+    tier: 1
+    evidence: {file: {path: cvfile, matches: '(?m)^!test:'}}
+
+  - id: correctness.ci-cpp
+    dim: correctness
+    desc: cv test + cv sanitize on ubuntu-latest and macos-latest (ci.yml test)
+    state: enforced
+    cadence: continuous
+    enforce: blocking
+    tier: 2
+    evidence: {ci_job: ci.yml#test}
+
+  - id: correctness.ci-go
+    dim: correctness
+    desc: go test and go vet on ubuntu-latest and macos-latest (ci.yml test-go)
+    state: enforced
+    cadence: continuous
+    enforce: blocking
+    tier: 2
+    evidence: {ci_job: ci.yml#test-go}
+
+  - id: correctness.sanitize
+    dim: correctness
+    desc: ASan/UBSan suite runs in CI
+    state: enforced
+    cadence: continuous
+    enforce: blocking
+    tier: 2
+    evidence: {ci_step: {workflow: ci.yml, name: Sanitizer test}}
+
+  - id: correctness.bundle-sync
+    dim: correctness
+    desc: CI fails if go/sqlift bundled sources drift from dist/
+    state: enforced
+    cadence: continuous
+    enforce: blocking
+    tier: 2
+    evidence: {ci_step: {workflow: ci.yml, name: Verify bundled sources are in sync with dist/}}
+
+  - id: correctness.go-examples
+    dim: correctness
+    desc: Go Example* tests exercise the public API
+    state: present
+    cadence: continuous
+    enforce: warning
+    tier: 2
+    evidence: {file: {path: go/sqlift/example_test.go, matches: 'func Example'}}
+
+  - id: correctness.windows
+    dim: correctness
+    desc: CI matrix includes windows-latest
+    state: planned
+    cadence: continuous
+    enforce: informational
+    tier: 3
+    reason: CI matrix is ubuntu-latest and macos-latest only; no windows-latest job.
+    evidence: {absent: {file: {path: .github/workflows/ci.yml, matches: 'windows-latest'}}}
+
+  - id: correctness.fuzzing
+    dim: correctness
+    desc: Fuzz harnesses over DDL parse / schema JSON
+    state: planned
+    cadence: continuous
+    enforce: informational
+    tier: 3
+    reason: No libFuzzer/OSS-Fuzz harness and no Go Fuzz* tests.
+    evidence: {absent: {file: {path: tests/fuzz.cpp}}}
+
+  # =========================== SECURITY / SUPPLY ==========================
+  - id: security.vendor-licenses
+    dim: security
+    desc: Vendored nlohmann/json ships its LICENSE
+    state: present
+    cadence: once-must-hold
+    enforce: warning
+    tier: 1
+    evidence: {file: {path: vendor/include/nlohmann/LICENSE}}
+
+  - id: security.github-secret-scan
+    dim: security
+    desc: GitHub secret scanning enabled on the repo
+    state: present
+    cadence: continuous
+    enforce: warning
+    tier: 2
+    evidence:
+      {gh_setting: {key: security_and_analysis.secret_scanning.status, equals: enabled}}
+
+  - id: security.push-protection
+    dim: security
+    desc: GitHub secret-scanning push protection enabled
+    state: present
+    cadence: continuous
+    enforce: warning
+    tier: 2
+    evidence:
+      {gh_setting: {key: security_and_analysis.secret_scanning_push_protection.status, equals: enabled}}
+
+  - id: security.gitleaks
+    dim: security
+    desc: Secret scanning (gitleaks) in pre-commit and/or CI
+    state: skipped
+    cadence: continuous
+    enforce: informational
+    tier: 3
+    reason: >-
+      GitHub native secret scanning and push protection are enabled; a second
+      gitleaks job would duplicate that gate. Reclassify if a local/CI scanner
+      is added.
+    evidence: {absent: {scanner: {tool: gitleaks}}}
+
+  - id: security.codeql
+    dim: security
+    desc: CodeQL static analysis for C++ and Go
+    state: planned
+    cadence: continuous
+    enforce: warning
+    tier: 3
+    reason: No CodeQL workflow; compile warnings and go vet are the only static checks.
+    evidence: {absent: {scanner: {tool: codeql}}}
+
+  - id: security.govulncheck
+    dim: security
+    desc: govulncheck over the Go module (stdlib + any future requires)
+    state: planned
+    cadence: periodic:30d
+    enforce: warning
+    tier: 3
+    reason: Zero third-party Go modules; no govulncheck job or config yet.
+    evidence: {absent: {scanner: {tool: govulncheck}}}
+
+  - id: security.actions-perms
+    dim: security
+    desc: CI workflow token permissions are explicitly scoped
+    state: planned
+    cadence: once-must-hold
+    enforce: warning
+    tier: 3
+    reason: >-
+      .github/workflows/ci.yml has no top-level `permissions:` block.
+    evidence: {absent: {file: {path: .github/workflows/ci.yml, matches: '(?m)^permissions:'}}}
+
+  - id: security.signed-releases
+    dim: security
+    desc: Release artifacts are checksummed and/or signed
+    state: skipped
+    cadence: per-release
+    enforce: informational
+    tier: 3
+    reason: Library (header+cpp and Go module); no release binaries to sign.
+    evidence: {absent: {ci_step: {workflow: release.yml, name: Sign}}}
+
+  # ============================== CODE QUALITY ============================
+  - id: quality.cxx-warnings
+    dim: quality
+    desc: C++ build uses -Wall -Wextra -Wpedantic
+    state: present
+    cadence: continuous
+    enforce: warning
+    tier: 1
+    evidence: {file: {path: cvfile, matches: '-Wall -Wextra -Wpedantic'}}
+
+  - id: quality.go-vet
+    dim: quality
+    desc: go vet ./... runs in CI (test-go job)
+    state: present
+    cadence: continuous
+    enforce: warning
+    tier: 1
+    evidence: {ci_step: {workflow: ci.yml, name: Vet}}
+
+  - id: quality.clang-format
+    dim: quality
+    desc: C++ sources are clang-format-clean, enforced in CI
+    state: planned
+    cadence: continuous
+    enforce: warning
+    tier: 2
+    reason: No .clang-format and no format-check step in CI.
+    evidence: {absent: {file: {path: .clang-format}}}
+
+  - id: quality.golangci
+    dim: quality
+    desc: golangci-lint (or equivalent) clean in CI
+    state: planned
+    cadence: continuous
+    enforce: warning
+    tier: 2
+    reason: No .golangci.yml and no lint job beyond go vet.
+    evidence: {absent: {file: {path: .golangci.yml}}}
+
+  # =========================== DEPENDENCY HEALTH ==========================
+  - id: deps.vendored-json
+    dim: deps
+    desc: nlohmann/json is vendored under vendor/include/
+    state: present
+    cadence: once-must-hold
+    enforce: blocking
+    tier: 1
+    evidence: {file: {path: vendor/include/nlohmann/json.hpp}}
+
+  - id: deps.vendored-doctest
+    dim: deps
+    desc: doctest is vendored under vendor/include/
+    state: present
+    cadence: once-must-hold
+    enforce: warning
+    tier: 1
+    evidence: {file: {path: vendor/include/doctest/doctest.h}}
+
+  - id: deps.notices
+    dim: deps
+    desc: NOTICES records third-party licenses and versions
+    state: present
+    cadence: once-must-hold
+    enforce: warning
+    tier: 1
+    evidence: {file: {path: NOTICES, matches: 'nlohmann/json'}}
+
+  - id: deps.gomod
+    dim: deps
+    desc: go/sqlift/go.mod pins a Go language version
+    state: present
+    cadence: once-must-hold
+    enforce: blocking
+    tier: 1
+    evidence: {file: {path: go/sqlift/go.mod, matches: '(?m)^go '}}
+
+  - id: deps.no-go-third-party
+    dim: deps
+    desc: Go module has no require block — zero third-party Go modules
+    state: present
+    cadence: once-must-hold
+    enforce: warning
+    tier: 2
+    evidence: {command: "! grep -qE '^require' go/sqlift/go.mod"}
+
+  - id: deps.dependabot
+    dim: deps
+    desc: Dependabot (or equivalent) watches Go modules and Actions
+    state: planned
+    cadence: periodic:30d
+    enforce: informational
+    tier: 3
+    reason: >-
+      Go module has zero third-party requires; C++ deps are vendored at pinned
+      versions (NOTICES). No .github/dependabot.yml for Actions either.
+    evidence: {absent: {file: {path: .github/dependabot.yml}}}
+
+  - id: deps.gosum-absent
+    dim: deps
+    desc: No go.sum (there is no module graph to pin)
+    state: skipped
+    cadence: per-release
+    enforce: informational
+    tier: 2
+    reason: Zero third-party Go modules; go.sum would be empty until a require is added.
+    evidence: {absent: {file: {path: go/sqlift/go.sum}}}
+
+  # ========================== RELEASE & VERSIONING =======================
+  - id: release.stability
+    dim: release
+    desc: STABILITY.md catalogues the pre-1.0 interaction surface
+    state: present
+    cadence: per-release
+    enforce: warning
+    tier: 1
+    evidence: {file: {path: STABILITY.md}}
+
+  - id: release.github
+    dim: release
+    desc: GitHub Releases exist for the v* tag series
+    state: present
+    cadence: per-release
+    enforce: warning
+    tier: 2
+    evidence: {command: "git tag --list 'v[0-9]*' | grep -q ."}
+
+  - id: release.semver-minor
+    dim: release
+    desc: Latest v* git tag is MINOR-only (PATCH == 0)
+    state: enforced
+    cadence: per-release
+    enforce: blocking
+    tier: 2
+    evidence:
+      command: >-
+        test "$(git tag --list 'v[0-9]*' --sort=-v:refname | head -1 | awk -F. '{print $NF}')" = "0"
+
+  - id: release.ci-built
+    dim: release
+    desc: Release binaries are built by CI
+    state: skipped
+    cadence: per-release
+    enforce: informational
+    tier: 2
+    reason: >-
+      C/Go library — consumers copy dist/ or `go get`; no release binaries to
+      build. Releases are git tags (v* and go/sqlift/v*).
+    evidence: {absent: {file: {path: .github/workflows/release.yml}}}
+
+  - id: release.changelog
+    dim: release
+    desc: A maintained CHANGELOG records user-visible changes per release
+    state: planned
+    cadence: per-release
+    enforce: warning
+    tier: 3
+    reason: README points changelog at GitHub Releases; no CHANGELOG.md in tree.
+    evidence: {absent: {file: {path: CHANGELOG.md}}}
+
+  # ============================ GOVERNANCE / META ========================
+  - id: governance.license
+    dim: governance
+    desc: Apache-2.0 LICENSE present
+    state: present
+    cadence: once-must-hold
+    enforce: blocking
+    tier: 1
+    evidence: {file: {path: LICENSE, matches: 'Apache License'}}
+
+  - id: governance.readme
+    dim: governance
+    desc: README present and current
+    state: present
+    cadence: once-must-hold
+    enforce: blocking
+    tier: 1
+    evidence: {file: {path: README.md}}
+
+  - id: governance.gitignore
+    dim: governance
+    desc: .gitignore covers build artifacts, IDE, and OS files
+    state: present
+    cadence: once-must-hold
+    enforce: warning
+    tier: 1
+    evidence: {file: {path: .gitignore, matches: '(?m)^build/'}}
+
+  - id: governance.squash-only
+    dim: governance
+    desc: Repo is squash-merge only, with delete-branch-on-merge
+    state: enforced
+    cadence: once-must-hold
+    enforce: blocking
+    tier: 2
+    evidence: {gh_setting: {key: allow_merge_commit, equals: false}}
+
+  - id: governance.security-md
+    dim: governance
+    desc: SECURITY.md documents the vulnerability-disclosure process
+    state: planned
+    cadence: once-must-hold
+    enforce: informational
+    tier: 3
+    reason: Public repo without a published disclosure policy yet.
+    evidence: {absent: {file: {path: SECURITY.md}}}
+
+  - id: governance.branch-protection
+    dim: governance
+    desc: Default branch (master) is protected with required checks
+    state: planned
+    cadence: once-must-hold
+    enforce: blocking
+    tier: 3
+    reason: gh api branches/master/protection returns 404; no required CI.
+    evidence: {absent: {gh_setting: {key: protected, equals: true}}}
+
+  # ================================= BUILD ===============================
+  - id: build.cvfile
+    dim: build
+    desc: Root cvfile declares C++23 build via std/cxx.cv
+    state: present
+    cadence: once-must-hold
+    enforce: blocking
+    tier: 1
+    evidence: {file: {path: cvfile, matches: 'include std/cxx.cv'}}
+
+  - id: build.cxx23
+    dim: build
+    desc: C++ sources compile as C++23
+    state: present
+    cadence: once-must-hold
+    enforce: warning
+    tier: 1
+    evidence: {file: {path: cvfile, matches: '-std=c\+\+23'}}
+
+  - id: build.go-version-file
+    dim: build
+    desc: CI installs Go from go/sqlift/go.mod (go-version-file)
+    state: present
+    cadence: continuous
+    enforce: warning
+    tier: 2
+    evidence:
+      {file: {path: .github/workflows/ci.yml, matches: 'go-version-file: go/sqlift/go.mod'}}
+
+  - id: build.sanitize-target
+    dim: build
+    desc: cvfile declares !sanitize (ASan/UBSan)
+    state: present
+    cadence: once-must-hold
+    enforce: informational
+    tier: 2
+    evidence: {file: {path: cvfile, matches: '(?m)^!sanitize:'}}
+
+  # ============================ DOCUMENTATION ============================
+  - id: docs.guide
+    dim: docs
+    desc: docs/guide.md covers concepts and workflows
+    state: present
+    cadence: once-must-hold
+    enforce: informational
+    tier: 1
+    evidence: {file: {path: docs/guide.md}}
+
+  - id: docs.reference
+    dim: docs
+    desc: docs/reference.md is the C API reference
+    state: present
+    cadence: once-must-hold
+    enforce: informational
+    tier: 1
+    evidence: {file: {path: docs/reference.md}}
+
+  - id: docs.reference-go
+    dim: docs
+    desc: docs/reference-go.md is the Go API reference
+    state: present
+    cadence: once-must-hold
+    enforce: informational
+    tier: 1
+    evidence: {file: {path: docs/reference-go.md}}
+
+  - id: docs.getting-started
+    dim: docs
+    desc: docs/getting-started.md is the tutorial
+    state: present
+    cadence: once-must-hold
+    enforce: informational
+    tier: 1
+    evidence: {file: {path: docs/getting-started.md}}
+
+  - id: docs.contributing
+    dim: docs
+    desc: CONTRIBUTING.md documents clone, test, and PR flow
+    state: planned
+    cadence: once-must-hold
+    enforce: informational
+    tier: 2
+    reason: No CONTRIBUTING.md; clone/test live in README and CLAUDE.md.
+    evidence: {absent: {file: {path: CONTRIBUTING.md}}}
+
+  - id: docs.md-links
+    dim: docs
+    desc: Internal markdown links resolve (no dead cross-references)
+    state: planned
+    cadence: continuous
+    enforce: informational
+    tier: 2
+    reason: No link-checker job or cv target; docs are reviewed by hand.
+    evidence: {absent: {ci_step: {workflow: ci.yml, name: Check markdown links}}}
+
+  # ============================== PERFORMANCE ===========================
+  - id: perf.benchmarks
+    dim: perf
+    desc: Benchmark suite exists for parse/diff/apply
+    state: planned
+    cadence: per-release
+    enforce: informational
+    tier: 3
+    reason: No Benchmark* tests and no C++ benchmark harness; performance is not tracked.
+    evidence: {absent: {file: {path: tests/bench.cpp}}}
+
+  # ============================== VCS / HISTORY =========================
+  - id: vcs.default-branch
+    dim: vcs
+    desc: Default branch is master
+    state: present
+    cadence: once-must-hold
+    enforce: blocking
+    tier: 1
+    evidence: {gh_setting: {key: default_branch, equals: master}}
+
+  - id: vcs.cv-gitignore
+    dim: vcs
+    desc: .cv/ (cv local state) is gitignored
+    state: planned
+    cadence: once-must-hold
+    enforce: warning
+    tier: 2
+    reason: cvfile !clean removes .cv/ but .gitignore does not list it; untracked .cv/ exists locally.
+    evidence: {absent: {file: {path: .gitignore, matches: '(?m)^\.cv/'}}}
+
+  - id: vcs.pre-commit-hook
+    dim: vcs
+    desc: Committed git hooks (scripts/hooks) gate locally before commit
+    state: planned
+    cadence: once-must-hold
+    enforce: informational
+    tier: 3
+    reason: No scripts/hooks; core.hooksPath is the default .git/hooks.
+    evidence: {absent: {file: {path: scripts/hooks/pre-commit}}}
+
+  # =================== AGENT-READINESS / ONBOARDING ====================
+  - id: agent.claude-md
+    dim: agent
+    desc: CLAUDE.md documents repo-local agent conventions
+    state: present
+    cadence: once-must-hold
+    enforce: warning
+    tier: 1
+    evidence: {file: {path: CLAUDE.md}}
+
+  - id: agent.agents-guide
+    dim: agent
+    desc: dist/sqlift-agents-guide.md is the packaged agent quick-start
+    state: present
+    cadence: once-must-hold
+    enforce: warning
+    tier: 1
+    evidence: {file: {path: dist/sqlift-agents-guide.md}}
+
+  - id: agent.bullseye
+    dim: agent
+    desc: bullseye.yaml present in-repo (convergence targets discoverable)
+    state: planned
+    cadence: once-must-hold
+    enforce: informational
+    tier: 2
+    reason: Ledger lives externally (~/.local/share/bullseye/.../bullseye.yaml); no in-repo copy.
+    evidence: {absent: {file: {path: bullseye.yaml}}}
+
+  - id: agent.agents-md
+    dim: agent
+    desc: AGENTS.md present as the multi-tool agent surface
+    state: skipped
+    cadence: once-must-hold
+    enforce: informational
+    tier: 3
+    reason: CLAUDE.md is the repo-local agent surface; no AGENTS.md yet.
+    evidence: {absent: {file: {path: AGENTS.md}}}
