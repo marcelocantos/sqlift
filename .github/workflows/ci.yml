@@ -7,7 +7,7 @@ on:
     branches: [master]
 
 jobs:
-  test:
+  gate:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
@@ -26,58 +26,12 @@ jobs:
           curl -sL "https://github.com/marcelocantos/cv/releases/download/${CV_VERSION}/cv-${CV_VERSION#v}-${ARCH}.tar.gz" | sudo tar xz -C /usr/local/bin cv
         env:
           GH_TOKEN: ${{ github.token }}
-
-      - name: Build and test
-        run: cv test
-
-      - name: Sanitizer test
-        run: cv sanitize
-
-  test-go:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install cv
-        run: |
-          CV_VERSION=$(gh release view --repo marcelocantos/cv --json tagName -q .tagName)
-          if [ "$RUNNER_OS" = "macOS" ]; then
-            ARCH="darwin-arm64"
-          else
-            ARCH="linux-amd64"
-          fi
-          curl -sL "https://github.com/marcelocantos/cv/releases/download/${CV_VERSION}/cv-${CV_VERSION#v}-${ARCH}.tar.gz" | sudo tar xz -C /usr/local/bin cv
-        env:
-          GH_TOKEN: ${{ github.token }}
-
-      - name: Verify bundled sources are in sync with dist/
-        run: |
-          cv bundle
-          if ! git diff --quiet; then
-            echo "::error::go/sqlift/ bundled sources are out of sync with dist/. Run 'cv bundle' and commit."
-            git --no-pager diff --stat
-            exit 1
-          fi
 
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
           go-version-file: go/sqlift/go.mod
 
-      - name: Test
-        # sqlift's cgo no longer hardcodes -lsqlite3 (downstream consumers
-        # like mnemo bring sqlite3 via mattn). sqlift's own tests have no
-        # such provider, so the test job adds the link flag explicitly.
-        working-directory: go/sqlift
-        env:
-          CGO_LDFLAGS: -lsqlite3
-        run: go test -v -count=1 ./...
-
-      - name: Vet
-        working-directory: go/sqlift
-        env:
-          CGO_LDFLAGS: -lsqlite3
-        run: go vet ./...
+      # The same gate the pre-push hook runs: cv bundle + drift check,
+      # cv test, cv sanitize, then go vet and go test in go/sqlift.
+      - run: make gate
