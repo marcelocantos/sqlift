@@ -403,8 +403,9 @@ TEST_CASE("apply rebuilds multiple tables") {
     CHECK(db.query_text("SELECT x FROM a WHERE id = 1") == "aa");
     CHECK(db.query_text("SELECT y FROM b WHERE id = 1") == "bb");
 
-    // Verify FK enforcement still ON after rebuild
-    CHECK(db.query_int64("PRAGMA foreign_keys") == 1);
+    // FK enforcement is restored to its pre-apply state, not forced ON: this
+    // connection never enabled it, so it must still be OFF.
+    CHECK(db.query_int64("PRAGMA foreign_keys") == 0);
 }
 
 TEST_CASE("migration_version starts at 0") {
@@ -458,4 +459,78 @@ TEST_CASE("apply detects drift") {
     auto plan_str = diff_schemas(current, v2);
 
     CHECK(apply_err(db.db, plan_str, SQLIFT_ALLOW_ALL) == SQLIFT_DRIFT_ERROR);
+}
+
+TEST_CASE("apply is atomic across operations") {
+    TestDB db;
+
+    // v1 establishes a stored schema hash, so any partial application below
+    // would wedge the database in permanent drift.
+    auto v1 = parse_schema("CREATE TABLE users (id INTEGER PRIMARY KEY);");
+    apply_plan(db.db, diff_schemas(empty_schema(), v1));
+
+    // Two-op plan whose second operation fails at prepare time. Hand-built
+    // because diff() only ever emits SQL it believes is valid.
+    const char* two_op_plan = R"J({
+        "version": 1,
+        "operations": [
+            {"type": "CreateTable", "object_name": "first",
+             "description": "create table first", "destructive": false,
+             "sql": ["CREATE TABLE first (id INTEGER PRIMARY KEY)"]},
+            {"type": "CreateTable", "object_name": "second",
+             "description": "create table second", "destructive": false,
+             "sql": ["CREATE TABLE second (id INTEGER PRIMARY KEY,"]}
+        ]
+    })J";
+
+    CHECK(apply_err(db.db, two_op_plan, SQLIFT_ALLOW_ALL) == SQLIFT_APPLY_ERROR);
+
+    // The first operation must have been rolled back with the second.
+    auto after = json::parse(extract_schema(db.db));
+    CHECK(after["tables"].size() == 1);
+    CHECK_FALSE(after["tables"].contains("first"));
+
+    // And the database must still be usable: a later migration must not trip
+    // the drift detector, which would leave no repair path.
+    auto v2 = parse_schema(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);");
+    auto current = extract_schema(db.db);
+    CHECK(apply_err(db.db, diff_schemas(current, v2), SQLIFT_ALLOW_ALL) == SQLIFT_OK);
+}
+
+TEST_CASE("apply is atomic across operations - rebuild rolls back prior op") {
+    TestDB db;
+
+    auto v1 = parse_schema(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, age TEXT);");
+    apply_plan(db.db, diff_schemas(empty_schema(), v1));
+    db.exec("INSERT INTO users VALUES (1, '30');");
+
+    // Op 1 (index) commits under autocommit today; op 2 (rebuild) fails
+    // because its copy step references a column that does not exist.
+    const char* plan = R"J({
+        "version": 1,
+        "operations": [
+            {"type": "CreateIndex", "object_name": "idx_users_age",
+             "description": "create index", "destructive": false,
+             "sql": ["CREATE INDEX idx_users_age ON users(age)"]},
+            {"type": "RebuildTable", "object_name": "users",
+             "description": "rebuild users", "destructive": false,
+             "requires_rebuild": true,
+             "sql": ["PRAGMA foreign_keys=OFF",
+                     "SAVEPOINT sqlift_rebuild",
+                     "CREATE TABLE users_new (id INTEGER PRIMARY KEY, age INTEGER)",
+                     "INSERT INTO users_new (id, age) SELECT id, nonexistent FROM users",
+                     "DROP TABLE users",
+                     "ALTER TABLE users_new RENAME TO users",
+                     "RELEASE SAVEPOINT sqlift_rebuild",
+                     "PRAGMA foreign_keys=ON"]}
+        ]
+    })J";
+
+    CHECK(apply_err(db.db, plan, SQLIFT_ALLOW_ALL) == SQLIFT_APPLY_ERROR);
+
+    auto after = json::parse(extract_schema(db.db));
+    CHECK(after["indexes"].empty());
+    CHECK(db.query_text("SELECT age FROM users WHERE id = 1") == "30");
 }

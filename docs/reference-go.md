@@ -187,15 +187,22 @@ After gates pass:
 1. Extract the current schema and read the stored hash from `_sqlift_state`.
    If a stored hash exists and differs from the current schema hash, return
    `*DriftError` (the schema was modified outside sqlift).
-2. Record the current `PRAGMA foreign_keys` state so it can be restored on
-   failure.
-3. Execute each operation's SQL statements. `PRAGMA foreign_key_check`
+2. Record the current `PRAGMA foreign_keys` state, disable FK enforcement,
+   and open the `sqlift_apply` savepoint. The whole plan runs inside this one
+   envelope, so a multi-operation apply is all-or-nothing.
+3. Execute each operation's SQL statements. `PRAGMA foreign_keys` statements
+   embedded in the rebuild recipe are skipped (SQLite ignores them inside a
+   transaction; they are hoisted to steps 2 and 5). `PRAGMA foreign_key_check`
    statements are handled specially: any returned rows indicate violations
    and cause `*ApplyError`.
-4. On any error: roll back the `sqlift_rebuild` savepoint (if open), release
-   it, restore the FK enforcement state, and return the original error.
-5. On success: extract the updated schema, store its SHA-256 hash in
-   `_sqlift_state`, and increment the migration version counter.
+4. On any error: roll back the `sqlift_rebuild` savepoint (if open) and then
+   the `sqlift_apply` envelope, releasing both, restore the FK enforcement
+   state, and return the original error. No schema change survives, and the
+   stored hash is left untouched.
+5. On success: release the `sqlift_apply` savepoint, restore the FK
+   enforcement state recorded in step 2, extract the updated schema, store
+   its SHA-256 hash in `_sqlift_state`, and increment the migration version
+   counter.
 
 **Parameters:**
 - `db` -- an open `*Database` handle (from `Open`).
