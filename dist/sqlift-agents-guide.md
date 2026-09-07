@@ -129,11 +129,23 @@ All `char*` return values must be freed with `sqlift_free()`. Error outputs
   },
   "indexes": { ... },
   "views": { ... },
-  "triggers": { ... }
+  "triggers": { ... },
+  "virtual_tables": {
+    "docs_fts": {
+      "name": "docs_fts", "module": "fts5", "args": "title, body",
+      "raw_sql": "CREATE VIRTUAL TABLE docs_fts USING fts5(title, body)"
+    }
+  }
 }
 ```
 
 Column `generated` values: 0 = normal, 2 = virtual, 3 = stored.
+
+`virtual_tables` is emitted only when the schema has at least one virtual
+table. Equality and hashing use `name`/`module`/`args` only. Virtual tables
+are never modified in place -- any change is `DropVirtualTable` +
+`CreateVirtualTable`. Module-internal shadow tables (FTS3/4/5, RTREE) are
+filtered out of `tables` during extract.
 
 ### Plan JSON format
 
@@ -165,7 +177,7 @@ Column `generated` values: 0 = normal, 2 = virtual, 3 = stored.
 
 Operation type strings: `CreateTable`, `DropTable`, `RebuildTable`,
 `AddColumn`, `CreateIndex`, `DropIndex`, `CreateView`, `DropView`,
-`CreateTrigger`, `DropTrigger`.
+`CreateTrigger`, `DropTrigger`, `CreateVirtualTable`, `DropVirtualTable`.
 
 ### Key behaviours
 
@@ -175,7 +187,7 @@ Operation type strings: `CreateTable`, `DropTable`, `RebuildTable`,
 - **Drift detection**: Stores SHA-256 hash in `_sqlift_state` table after each apply. Returns `SQLIFT_DRIFT_ERROR` if schema changed outside sqlift.
 - **Data-dependent change detection**: `sqlift_diff()` tags rebuild ops with `data_dependent: true` for schema changes whose success depends on existing data. `sqlift_apply()` rejects them with `SQLIFT_BREAKING_CHANGE_ERROR` unless `SQLIFT_ALLOW_DATA_DEPENDENT` is set. Detected cases: (1) existing nullable column becomes NOT NULL, (2) new FK constraint added to existing table, (3) new CHECK constraint added to existing table, (4) new NOT NULL column without DEFAULT.
 - **No rename detection**: A removed + added column is always a drop + add.
-- **Operation order**: Drop triggers/views/indexes, then table ops, then create indexes/views/triggers.
+- **Operation order**: Drop triggers/views/indexes, then table ops, then virtual table ops (drops before creates), then create indexes/views/triggers.
 
 ## Go
 

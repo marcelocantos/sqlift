@@ -5,10 +5,11 @@ Declarative SQLite schema migration library. Two files in `dist/`: `sqlift.h` (C
 ## Build
 
 ```sh
-mk            # build library
-cv test       # build and run tests
-cv lib        # build static library only
-cv clean      # remove build artifacts
+cv lib        # build the static library (build/libsqlift.a)
+cv test       # build and run the doctest suite
+cv sanitize   # build and run the suite under ASan + UBSan
+cv bundle     # refresh the Go module's bundled copies of dist/ + vendor/
+cv clean      # remove build/ and .cv/
 ```
 
 Uses [cv](https://github.com/marcelocantos/cv) as the build tool (`cvfile`). Requires C++23 and system SQLite3. doctest and nlohmann/json are vendored in `vendor/include/`.
@@ -25,7 +26,7 @@ Three core operations exposed via the C API:
 
 Plus one action:
 
-4. **`sqlift_apply(db, plan_json, opts)`** -- execute the plan's SQL. `opts.allow` is a bitmask (`SQLIFT_ALLOW_REBUILD`, `SQLIFT_ALLOW_DESTRUCTIVE`, `SQLIFT_ALLOW_ALL`); zero is the strictest policy (additive changes only).
+4. **`sqlift_apply(db, plan_json, opts)`** -- execute the plan's SQL. `opts.allow` is a bitmask of `SQLIFT_ALLOW_REBUILD`, `SQLIFT_ALLOW_DESTRUCTIVE`, `SQLIFT_ALLOW_LOOSEN`, and `SQLIFT_ALLOW_DATA_DEPENDENT` (`SQLIFT_ALLOW_NONE` = 0, `SQLIFT_ALLOW_ALL` = all four); zero is the strictest policy (additive changes only).
 
 `sqlift_diff()` never touches a database. `sqlift_apply()` stores a SHA-256 hash in `_sqlift_state` for drift detection.
 
@@ -34,6 +35,7 @@ Plus one action:
 - **C-only public API.** The header is plain C with `extern "C"` guards. All data interchange uses JSON strings. C++ types are implementation-internal.
 - **Breaking change detection.** `sqlift_diff()` returns `SQLIFT_BREAKING_CHANGE_ERROR` for schema changes whose success depends on existing data: nullable→NOT NULL, adding FK constraints, new NOT NULL column without DEFAULT. These are rejected because they may succeed on one database instance but fail on another.
 - **No rename detection.** A disappearing column + appearing column = drop + add. Always.
+- **Virtual tables are drop+recreate.** `CREATE VIRTUAL TABLE` objects live in a separate `virtual_tables` map. There is no in-place modification path, so any module/args change is `DropVirtualTable` + `CreateVirtualTable` (contents are lost). Module-internal shadow tables (FTS3/4/5, RTREE suffixes) are filtered during extract; an unknown module's shadows leak through as ordinary tables, a deliberately visible failure mode.
 - **`raw_sql` excluded from equality.** SQLite doesn't update `sqlite_master.sql` after `ALTER TABLE ADD COLUMN`, so `Table`/`Index` equality is structural only.
 - **AddColumn fast path.** If the only change is appending nullable (or NOT NULL + DEFAULT) columns, use `ALTER TABLE ADD COLUMN` instead of a full rebuild.
 - **12-step rebuild.** Any other table modification uses SQLite's recommended rebuild sequence (disable FKs, savepoint, create new table, copy data, drop old, rename, recreate indexes/triggers, FK check, release, re-enable FKs).
@@ -41,7 +43,7 @@ Plus one action:
 
 ## Diff operation ordering
 
-1. Drop triggers  2. Drop views  3. Drop indexes  4. Table ops (create, rebuild, drop)  5. Create indexes  6. Create views  7. Create triggers
+1. Drop triggers  2. Drop views  3. Drop indexes  4. Table ops (create, rebuild, drop)  4b. Virtual table ops (drop, then create)  5. Create indexes  6. Create views  7. Create triggers
 
 ## File layout
 
@@ -51,7 +53,7 @@ dist/
   sqlift.cpp      # All implementation (C++ types, logic, C wrapper)
   sqlift-agents-guide.md # Quick-start guide for AI coding agents
 cvfile            # cv build file
-tests/            # doctest suites (7 files, 125 tests) using C API with JSON
+tests/            # doctest suites (9 files, 152 test cases) using C API with JSON
   test_helpers.h  # Test utilities (RAII wrappers, JSON convenience functions)
 docs/guide.md     # Concepts and workflows
 docs/reference.md # Complete API reference
@@ -68,6 +70,12 @@ The Go module at `go/sqlift/` bundles its own copies of `sqlift.cpp`,
 cgo compiles `sqlift.cpp` directly as part of the package build, so
 downstream Go consumers can `go get` and build without any separate
 `cv lib` step.
+
+The package does **not** put `-lsqlite3` in its cgo `LDFLAGS` (see the
+comment at the top of `go/sqlift/cgo.go`) — the consumer chooses where
+sqlite3 symbols come from. Running the Go tests locally therefore needs
+`CGO_LDFLAGS=-lsqlite3 go test ./...`; a bare `go test ./...` fails at
+link time with undefined `sqlite3_*` symbols.
 
 **dist/ is the source of truth.** When you edit `dist/sqlift.cpp`,
 `dist/sqlift.h`, or `vendor/include/nlohmann/json.hpp`, run `cv bundle`
@@ -89,3 +97,5 @@ All tests use the C API with JSON interchange. Tests run in-memory (`:memory:` d
 - `test_apply.cpp` -- applying plan JSON, destructive guard, drift detection
 - `test_json.cpp` -- JSON validation, round-trips, and error cases
 - `test_roundtrip.cpp` -- end-to-end parse/diff/apply/extract cycles
+- `test_virtual.cpp` -- virtual tables: parse, extract (shadow-table filtering), diff, apply
+- `test_main.cpp` -- doctest entry point (`DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN`)

@@ -484,9 +484,21 @@ Returned by `sqlift_parse()` and `sqlift_extract()`. Accepted by
       "table_name": "users",
       "sql": "CREATE TRIGGER on_delete ..."
     }
+  },
+  "virtual_tables": {
+    "docs_fts": {
+      "name": "docs_fts",
+      "module": "fts5",
+      "args": "title, body",
+      "raw_sql": "CREATE VIRTUAL TABLE docs_fts USING fts5(title, body)"
+    }
   }
 }
 ```
+
+The `virtual_tables` key is emitted only when the schema contains at least
+one virtual table, so JSON for virtual-table-free schemas is byte-identical
+to pre-feature output.
 
 **Column fields:**
 
@@ -541,6 +553,26 @@ only) but included in `sqlift_schema_hash()`.
 | `where_clause` | string | Partial index `WHERE` clause. Empty if not partial. |
 | `raw_sql` | string | Original `CREATE INDEX` from `sqlite_master` (excluded from equality) |
 
+**Virtual table fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Virtual table name |
+| `module` | string | Module name (e.g. `"fts5"`, `"rtree"`) |
+| `args` | string | Raw argument text between the module's parentheses |
+| `raw_sql` | string | Original `CREATE VIRTUAL TABLE` statement |
+
+Equality compares `name`, `module`, and `args`; `raw_sql` is excluded.
+Virtual tables have no in-place modification path: any change to `module` or
+`args`, or removal, is emitted as `DropVirtualTable` + `CreateVirtualTable`
+(the drop is marked destructive).
+
+Module-internal shadow tables are filtered out during `sqlift_extract()` so
+they never appear as ordinary tables (which would trigger spurious drops on
+the next diff). Filtering is by known suffix per module: FTS5, FTS4, FTS3,
+and RTREE. Shadow tables of an unrecognised module leak through as regular
+tables -- a deliberately visible failure mode.
+
 ---
 
 ### Plan JSON format
@@ -589,7 +621,7 @@ Returned by `sqlift_diff()`. Accepted by `sqlift_apply()`.
 
 **Operation types:** `CreateTable`, `DropTable`, `RebuildTable`, `AddColumn`,
 `CreateIndex`, `DropIndex`, `CreateView`, `DropView`, `CreateTrigger`,
-`DropTrigger`.
+`DropTrigger`, `CreateVirtualTable`, `DropVirtualTable`.
 
 ---
 

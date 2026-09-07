@@ -464,6 +464,8 @@ their normalised SQL text; if the text differs, they are dropped and recreated.
 | `DropView` | Drop a view | Yes (if permanently removed) |
 | `CreateTrigger` | Create a new trigger | No |
 | `DropTrigger` | Drop a trigger | Yes (if permanently removed) |
+| `CreateVirtualTable` | Create a virtual table (`CREATE VIRTUAL TABLE ... USING module(...)`) | No |
+| `DropVirtualTable` | Drop a virtual table | Yes |
 
 sqlift orders operations to avoid constraint violations:
 
@@ -471,9 +473,10 @@ sqlift orders operations to avoid constraint violations:
 2. Drop views
 3. Drop indexes
 4. Table operations (creates, rebuilds, drops)
-5. Create indexes
-6. Create views
-7. Create triggers
+5. Virtual table operations (drops, then creates)
+6. Create indexes
+7. Create views
+8. Create triggers
 
 Within table operations, new tables are created before tables that reference
 them via foreign keys. Views and triggers are ordered by dependency analysis --
@@ -482,6 +485,25 @@ sqlift extracts SQL references from each object and uses topological sort
 and created after them. A circular dependency raises a `DiffError`.
 
 ## Feature details
+
+### Virtual tables
+
+sqlift understands `CREATE VIRTUAL TABLE name USING module(args)` and tracks
+it under a separate `virtual_tables` map, keyed by name. Comparison uses the
+name, module, and argument text; the raw SQL is ignored.
+
+There is no in-place modification path for a virtual table, so any change to
+the module or its arguments -- and any removal -- becomes a `DropVirtualTable`
+followed by a `CreateVirtualTable`. The drop half is destructive and needs
+`SQLIFT_ALLOW_DESTRUCTIVE` / `AllowDestructive`. **The virtual table's contents
+are lost**; an FTS index must be repopulated afterwards.
+
+Modules such as FTS5 materialise their own backing storage as real tables
+(`docs_fts_data`, `docs_fts_idx`, ...). `sqlift_extract()` filters these out by
+known suffix for FTS3, FTS4, FTS5, and RTREE so they never show up in `tables`
+and provoke spurious drops. An unrecognised module's shadow tables leak
+through as ordinary tables -- a deliberately visible failure mode rather than
+silent corruption of the parent virtual table.
 
 ### CHECK constraints
 

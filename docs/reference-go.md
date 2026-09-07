@@ -6,9 +6,22 @@ Package `sqlift` provides declarative SQLite schema migration for Go.
 import "github.com/marcelocantos/sqlift/go/sqlift"
 ```
 
-Requires CGo. The Go library wraps the C implementation via an `extern "C"`
-interface; the `*Database` type manages the SQLite connection directly through
-the C layer (no `database/sql` or third-party driver).
+Requires CGo and a C++23 compiler. The Go library wraps the C implementation
+via an `extern "C"` interface; the `*Database` type manages the SQLite
+connection directly through the C layer (no `database/sql` or third-party
+driver).
+
+**Linking SQLite.** The package does not add `-lsqlite3` to its cgo `LDFLAGS`,
+because where the sqlite3 symbols come from is the consumer's choice. Supply
+them one of three ways, or linking fails with `Undefined symbols ... sqlite3_*`:
+
+- `import _ "github.com/mattn/go-sqlite3"` -- resolves against mattn's
+  statically bundled sqlite3.
+- System SQLite: build with `CGO_LDFLAGS=-lsqlite3` (Linux, macOS).
+- Link your own `sqlite3.c` amalgamation from your package's cgo directives.
+
+Hardcoding `-lsqlite3` would break cross-compiles to targets without a matching
+libsqlite3 and duplicate linker work for consumers who already bring it.
 
 For the C API, see [C API Reference](reference.md). For conceptual
 background, see [Guide](guide.md).
@@ -268,14 +281,54 @@ fmt.Printf("Applied %d migration(s)\n", v)
 
 ## Types
 
+### `Database`
+
+```go
+type Database struct { /* opaque */ }
+
+func Open(path string) (*Database, error)
+func (d *Database) Close()
+func (d *Database) Exec(sql string) error
+func (d *Database) QueryInt64(sql string) (int64, error)
+func (d *Database) QueryText(sql string) (string, error)
+```
+
+`Database` wraps the SQLite handle owned by the C++ layer. It is not a
+`database/sql` driver and cannot be used with one.
+
+- `Open` opens (or creates) the database at `path`, using SQLite's default
+  `READWRITE|CREATE` flags. `":memory:"` opens a private in-memory database.
+  Returns an error type from [Error types](#error-types) on failure.
+- `Close` releases the handle. Safe to call more than once; the second call
+  is a no-op. There is no finalizer -- always `defer db.Close()`.
+- `Exec` runs SQL that returns no rows. Errors surface as `*ApplyError`.
+- `QueryInt64` runs a query and returns the first column of the first row as
+  an `int64`. Errors, including no rows, surface as `*ApplyError`.
+- `QueryText` is the same for a text column, returning a `string`.
+
+`Exec`, `QueryInt64`, and `QueryText` exist so a caller can inspect or seed a
+database without pulling in a second SQLite driver alongside the cgo one.
+They are conveniences, not a general query API.
+
+```go
+db, err := sqlift.Open("app.db")
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close()
+```
+
+---
+
 ### `Schema`
 
 ```go
 type Schema struct {
-    Tables   map[string]Table
-    Indexes  map[string]Index
-    Views    map[string]View
-    Triggers map[string]Trigger
+    Tables        map[string]Table
+    Indexes       map[string]Index
+    Views         map[string]View
+    Triggers      map[string]Trigger
+    VirtualTables map[string]VirtualTable
 }
 
 func (s Schema) Equal(o Schema) bool
@@ -285,12 +338,14 @@ func (s Schema) Hash() string
 A complete representation of a SQLite database schema. Each map is keyed by
 object name.
 
-`Equal` performs a structural comparison across all four maps, delegating to
+`Equal` performs a structural comparison across all five maps, delegating to
 the `Equal` method of each element type.
 
 `Hash` returns a hex-encoded SHA-256 digest of a deterministic serialisation
-of the schema. Tables, indexes, views, and triggers are each sorted
-lexicographically by name before hashing to ensure a stable result. The
+of the schema. Tables, indexes, views, triggers, and virtual tables are each
+sorted lexicographically by name before hashing to ensure a stable result.
+Virtual tables are appended to the serialisation only when the map is
+non-empty, so schemas without them hash identically to pre-feature output. The
 serialisation format is identical to the C implementation, enabling
 cross-language drift detection when both are used against the same database.
 `PKConstraintName` and `ForeignKey.ConstraintName` are excluded from the
@@ -451,6 +506,29 @@ func (tr Trigger) Equal(o Trigger) bool
 
 ---
 
+### `VirtualTable`
+
+```go
+type VirtualTable struct {
+    Name   string
+    Module string // e.g. "fts5", "rtree".
+    Args   string // Raw argument text between the module's parentheses.
+    RawSQL string // Full CREATE VIRTUAL TABLE statement.
+}
+
+func (vt VirtualTable) Equal(o VirtualTable) bool
+```
+
+`Equal` compares `Name`, `Module`, and `Args`; `RawSQL` is excluded.
+
+Virtual tables have no in-place modification path. Any change to `Module` or
+`Args`, or removal, is emitted as `DropVirtualTable` + `CreateVirtualTable`;
+the drop half is marked destructive. `Extract` filters out module-internal
+shadow tables (FTS3/FTS4/FTS5 and RTREE suffixes) so they do not appear in
+`Schema.Tables` and provoke spurious drops.
+
+---
+
 ### `MigrationPlan`
 
 ```go
@@ -555,6 +633,8 @@ const (
     DropView                   // Drop an existing view.
     CreateTrigger              // Create a new trigger.
     DropTrigger                // Drop an existing trigger.
+    CreateVirtualTable         // Create a CREATE VIRTUAL TABLE.
+    DropVirtualTable           // Drop a virtual table (also drops its shadow tables).
 )
 
 func (t OpType) String() string

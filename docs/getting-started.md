@@ -425,6 +425,6 @@ You've seen the full lifecycle: initial creation, fast-path column additions, mu
 
 For deeper coverage of individual features:
 
-- **[guide.md](guide.md)** — Concepts and workflows: CHECK constraints, COLLATE, GENERATED columns, STRICT tables, foreign key enforcement, the 12-step rebuild sequence, and strategies for breaking changes.
+- **[guide.md](guide.md)** — Concepts and workflows: CHECK constraints, COLLATE, GENERATED columns, STRICT tables, foreign key enforcement, virtual tables, the 12-step rebuild sequence, and strategies for breaking changes.
 - **[reference.md](reference.md)** — Complete C API reference.
 - **[reference-go.md](reference-go.md)** — Complete Go API reference.

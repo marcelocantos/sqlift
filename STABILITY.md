@@ -251,11 +251,17 @@ type Index struct {
 type View    struct { Name, SQL string }
 type Trigger struct { Name, TableName, SQL string }
 
+type VirtualTable struct {
+    Name, Module, Args string
+    RawSQL             string // Excluded from Equal.
+}
+
 type Schema struct {
-    Tables   map[string]Table
-    Indexes  map[string]Index
-    Views    map[string]View
-    Triggers map[string]Trigger
+    Tables        map[string]Table
+    Indexes       map[string]Index
+    Views         map[string]View
+    Triggers      map[string]Trigger
+    VirtualTables map[string]VirtualTable
 }
 
 func (s Schema) Equal(o Schema) bool
@@ -300,6 +306,8 @@ const (
     DropView
     CreateTrigger
     DropTrigger
+    CreateVirtualTable
+    DropVirtualTable
 )
 
 func (t OpType) String() string

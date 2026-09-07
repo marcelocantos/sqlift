@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // The bundled sqlift.cpp and sqlift.h here are copies of dist/sqlift.cpp
-// and dist/sqlift.h; `mk bundle` keeps them in sync. The single-header
+// and dist/sqlift.h; `cv bundle` keeps them in sync. The single-header
 // nlohmann/json dependency is bundled under include/nlohmann/ so consumers
 // can `go get` and build with cgo and no extra setup.
 //

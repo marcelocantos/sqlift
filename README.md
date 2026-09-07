@@ -100,21 +100,37 @@ condensed API reference covering both C and Go.
 ### C/C++
 
 ```sh
-mk            # build library
-cv test       # build and run tests
-cv lib        # build static library only
+cv lib        # build the static library (build/libsqlift.a)
+cv test       # build and run the doctest suite
+cv sanitize   # build and run the suite under ASan + UBSan
+cv install    # install sqlift.h + libsqlift.a under $prefix (default /usr/local)
 cv clean      # remove build artifacts
 ```
 
-Requires [cv](https://github.com/marcelocantos/cv) build tool and
-[doctest](https://github.com/doctest/doctest) (vendored).
+Requires a C++23 compiler, system SQLite3, and the
+[cv](https://github.com/marcelocantos/cv) build tool.
+[doctest](https://github.com/doctest/doctest) and
+[nlohmann/json](https://github.com/nlohmann/json) are vendored under
+`vendor/include/`.
 
 ### Go
 
 ```sh
 cd go/sqlift
-go test ./...
+CGO_LDFLAGS=-lsqlite3 go test ./...
 ```
+
+The package deliberately does **not** put `-lsqlite3` in its cgo `LDFLAGS`
+(see `go/sqlift/cgo.go`): the bundled `sqlift.cpp` calls sqlite3 symbols, but
+where those symbols come from is the consumer's choice. Pick one:
+
+- `import _ "github.com/mattn/go-sqlite3"` -- sqlift's symbols resolve against
+  mattn's statically bundled sqlite3.
+- System SQLite: build with `CGO_LDFLAGS=-lsqlite3` (Linux and macOS).
+- Link your own `sqlite3.c` amalgamation via your package's own cgo directives.
+
+Building or testing with none of these produces `Undefined symbols ... sqlite3_*`
+at link time.
 
 ## Related projects
 
