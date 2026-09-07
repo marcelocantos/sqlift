@@ -148,7 +148,7 @@ Operation fields: `type`, `object_name`, `description`, `sql`, `destructive`.
 
 Operation types: `CreateTable`, `DropTable`, `RebuildTable`, `AddColumn`,
 `CreateIndex`, `DropIndex`, `CreateView`, `DropView`, `CreateTrigger`,
-`DropTrigger`.
+`DropTrigger`, `CreateVirtualTable`, `DropVirtualTable`.
 
 **Warning JSON** (in plan `warnings` and from `sqlift_detect_redundant_indexes`):
 
@@ -300,6 +300,8 @@ const (
     DropView
     CreateTrigger
     DropTrigger
+    CreateVirtualTable
+    DropVirtualTable
 )
 
 func (t OpType) String() string
@@ -319,8 +321,20 @@ func (p MigrationPlan) Warnings() []Warning
 func (p MigrationPlan) HasDestructiveOperations() bool
 func (p MigrationPlan) Empty() bool
 
+type AllowFlags uint32
+
+const (
+    AllowRebuild       AllowFlags = 1 << 0
+    AllowDestructive   AllowFlags = 1 << 1
+    AllowLoosen        AllowFlags = 1 << 2
+    AllowDataDependent AllowFlags = 1 << 3
+
+    AllowNone AllowFlags = 0
+    AllowAll  AllowFlags = AllowRebuild | AllowDestructive | AllowLoosen | AllowDataDependent
+)
+
 type ApplyOptions struct {
-    AllowDestructive bool
+    Allow AllowFlags
 }
 ```
 
@@ -346,6 +360,7 @@ func ParseOpType(s string) (OpType, error)
 *DriftError
 *DestructiveError
 *BreakingChangeError
+*RebuildError
 *JSONError
 ```
 

@@ -499,7 +499,9 @@ CREATE TABLE products (
 CHECK constraints are included in structural equality comparisons. Changing a
 CHECK expression triggers a table rebuild. Adding a CHECK constraint to an
 existing table is a breaking change -- existing rows may violate the new
-constraint, so `diff()` raises `BreakingChangeError`.
+constraint, so `Apply` rejects the plan with `*BreakingChangeError` unless
+`AllowDataDependent` is set in `ApplyOptions.Allow`. `Diff` itself only marks
+the operation `DataDependent`.
 
 ### COLLATE clauses
 

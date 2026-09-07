@@ -165,7 +165,7 @@ Column `generated` values: 0 = normal, 2 = virtual, 3 = stored.
 
 Operation type strings: `CreateTable`, `DropTable`, `RebuildTable`,
 `AddColumn`, `CreateIndex`, `DropIndex`, `CreateView`, `DropView`,
-`CreateTrigger`, `DropTrigger`.
+`CreateTrigger`, `DropTrigger`, `CreateVirtualTable`, `DropVirtualTable`.
 
 ### Key behaviours
 
@@ -295,7 +295,7 @@ without triggering drift detection.
 
 ## Agentic migration guidance
 
-When `sqlift_diff()` returns `SQLIFT_BREAKING_CHANGE_ERROR`, agentic coding tools can suggest safe alternatives. Common patterns:
+When `sqlift_apply()` returns `SQLIFT_BREAKING_CHANGE_ERROR` for a data-dependent operation, agentic coding tools can suggest safe alternatives. Common patterns:
 
 - **Nullable → NOT NULL**: Create a new table with the desired schema, write application code to copy data (coalescing NULLs), then drop the old table in a later release.
 - **Adding FK constraints**: Create a new table with the FK, migrate data at the application level (filtering orphans), retire the old table.

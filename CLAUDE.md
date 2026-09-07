@@ -32,7 +32,7 @@ Plus one action:
 ## Key design decisions
 
 - **C-only public API.** The header is plain C with `extern "C"` guards. All data interchange uses JSON strings. C++ types are implementation-internal.
-- **Breaking change detection.** `sqlift_diff()` returns `SQLIFT_BREAKING_CHANGE_ERROR` for schema changes whose success depends on existing data: nullable→NOT NULL, adding FK constraints, new NOT NULL column without DEFAULT. These are rejected because they may succeed on one database instance but fail on another.
+- **Breaking change detection.** `sqlift_diff()` tags data-dependent operations with `data_dependent: true` for schema changes whose success depends on existing data: nullable→NOT NULL, adding FK/CHECK constraints, new NOT NULL column without DEFAULT. The policy gate is in `sqlift_apply()`, which rejects them with `SQLIFT_BREAKING_CHANGE_ERROR` unless the data-dependent allowance is set. Diffing never touches a database, so it cannot know whether the data would violate the change.
 - **No rename detection.** A disappearing column + appearing column = drop + add. Always.
 - **`raw_sql` excluded from equality.** SQLite doesn't update `sqlite_master.sql` after `ALTER TABLE ADD COLUMN`, so `Table`/`Index` equality is structural only.
 - **AddColumn fast path.** If the only change is appending nullable (or NOT NULL + DEFAULT) columns, use `ALTER TABLE ADD COLUMN` instead of a full rebuild.
@@ -51,7 +51,7 @@ dist/
   sqlift.cpp      # All implementation (C++ types, logic, C wrapper)
   sqlift-agents-guide.md # Quick-start guide for AI coding agents
 cvfile            # cv build file
-tests/            # doctest suites (7 files, 125 tests) using C API with JSON
+tests/            # doctest suites (8 files) using C API with JSON
   test_helpers.h  # Test utilities (RAII wrappers, JSON convenience functions)
 docs/guide.md     # Concepts and workflows
 docs/reference.md # Complete API reference

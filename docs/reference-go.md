@@ -279,10 +279,11 @@ fmt.Printf("Applied %d migration(s)\n", v)
 
 ```go
 type Schema struct {
-    Tables   map[string]Table
-    Indexes  map[string]Index
-    Views    map[string]View
-    Triggers map[string]Trigger
+    Tables        map[string]Table
+    Indexes       map[string]Index
+    Views         map[string]View
+    Triggers      map[string]Trigger
+    VirtualTables map[string]VirtualTable
 }
 
 func (s Schema) Equal(o Schema) bool
@@ -562,6 +563,8 @@ const (
     DropView                   // Drop an existing view.
     CreateTrigger              // Create a new trigger.
     DropTrigger                // Drop an existing trigger.
+    CreateVirtualTable         // Create a CREATE VIRTUAL TABLE.
+    DropVirtualTable           // Drop a virtual table (also drops its shadow tables).
 )
 
 func (t OpType) String() string

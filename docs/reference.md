@@ -589,7 +589,7 @@ Returned by `sqlift_diff()`. Accepted by `sqlift_apply()`.
 
 **Operation types:** `CreateTable`, `DropTable`, `RebuildTable`, `AddColumn`,
 `CreateIndex`, `DropIndex`, `CreateView`, `DropView`, `CreateTrigger`,
-`DropTrigger`.
+`DropTrigger`, `CreateVirtualTable`, `DropVirtualTable`.
 
 ---
 

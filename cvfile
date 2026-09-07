@@ -30,6 +30,7 @@ build/test/{name}.o: tests/{name}.cpp dist/sqlift.h tests/test_helpers.h
 
 !test: $test_bin
     ./$input
+    ./scripts/check-docs.sh
 
 $test_bin: $test_obj $lib
     $cxx $cxxflags $inputs $ldlibs -o $target
