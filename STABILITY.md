@@ -84,6 +84,12 @@ char*      sqlift_db_query_text(sqlift_db* db, const char* sql,
 **Stable.** Opaque handle wrapping SQLite. Query functions are convenience
 helpers for tests and simple consumers.
 
+Postgres (additive): `sqlift_db_wrap_exec(engine, sqlift_exec)` and
+`sqlift_parse_on(db, ddl)` wrap a live server without putting `libpq` in
+this header. `SQLIFT_ALLOW_REBUILD` on Postgres means `ALTER COLUMN TYPE`
+(table rewrite), not the SQLite 12-step rebuild. Schema JSON may include
+`"dialect":"postgres"`.
+
 #### Core functions
 
 ```c

@@ -1,6 +1,12 @@
 # sqlift
 
-Declarative SQLite schema migration for C and Go.
+Declarative SQLite and Postgres schema migration for C and Go.
+
+Postgres extract, parse-on, diff, and apply share the SQLite schema IR.
+Wrap a live connection with `sqlift_db_wrap_exec` (no `libpq` types in
+`sqlift.h`). `sqlift_parse_on` loads desired DDL through a temporary schema.
+`sqlift_diff` stays a pure function. Apply emits `ALTER`/`CREATE`/`DROP`.
+`SQLIFT_ALLOW_REBUILD` means `ALTER COLUMN TYPE` on Postgres.
 
 Maintain your schema as a single SQL file. sqlift diffs it against your database
 and applies the changes -- no numbered migration files, no ordering conflicts, no
@@ -100,7 +106,7 @@ condensed API reference covering both C and Go.
 ### C/C++
 
 ```sh
-cv test       # build and run tests
+cv test       # doctest (live Postgres when PG* is set and libpq is present)
 cv lib        # build static library only
 cv sanitize   # build and run tests with ASan/UBSan
 cv clean      # remove build artifacts

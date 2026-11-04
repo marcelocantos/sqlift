@@ -3,8 +3,11 @@ include std/cxx.cv
 ccache = $[shell command -v ccache 2>/dev/null]
 cxx = $ccache c++
 cxxflags = -std=c++23 -Wall -Wextra -Wpedantic -O2
-cppflags = -Idist -Ivendor/include
-ldlibs = -lsqlite3
+lazy pq_cflags = $[shell pkg-config --cflags libpq 2>/dev/null || (test -d /opt/homebrew/opt/libpq && echo -I/opt/homebrew/opt/libpq/include) || echo ""]
+lazy pq_libs   = $[shell pkg-config --libs libpq 2>/dev/null || (test -d /opt/homebrew/opt/libpq && echo -L/opt/homebrew/opt/libpq/lib -lpq) || echo ""]
+lazy pq_def    = $[shell pkg-config --exists libpq && echo -DSQLIFT_HAVE_POSTGRES || (test -d /opt/homebrew/opt/libpq && echo -DSQLIFT_HAVE_POSTGRES) || echo ""]
+cppflags = -Idist -Ivendor/include $pq_cflags $pq_def
+ldlibs = -lsqlite3 $pq_libs
 prefix ?= /usr/local
 
 test_src = $[wildcard tests/*.cpp]

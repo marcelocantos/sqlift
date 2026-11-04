@@ -1,6 +1,7 @@
 # sqlift -- Agent Guide
 
-Declarative SQLite schema migration. Available as a C library (with Go bindings).
+Declarative SQLite and Postgres schema migration. Available as a C library (with Go bindings).
+Postgres: `sqlift_db_wrap_exec` + `sqlift_parse_on` (no libpq in the public header). `sqlift_diff` is still pure JSON.
 
 ## C API
 

@@ -1,6 +1,6 @@
 # sqlift
 
-Declarative SQLite schema migration library. Two files in `dist/`: `sqlift.h` (C-only public header) and `sqlift.cpp` (all implementation).
+Declarative schema migration library (SQLite and Postgres). Two files in `dist/`: `sqlift.h` (C-only public header) and `sqlift.cpp` (all implementation). Postgres is wrapped via `sqlift_db_wrap_exec` — the public header does not include libpq.
 
 ## Build
 
@@ -92,3 +92,4 @@ All tests use the C API with JSON interchange. Tests run in-memory (`:memory:` d
 - `test_json.cpp` -- JSON validation, round-trips, and error cases
 - `test_roundtrip.cpp` -- end-to-end parse/diff/apply/extract cycles
 - `test_virtual.cpp` -- CREATE VIRTUAL TABLE parse/extract/diff/apply, shadow-table filter, hash snapshots
+- `test_postgres.cpp` -- live Postgres extract / parse-on / diff / apply (skips without libpq or a server)
